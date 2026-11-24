@@ -16,8 +16,8 @@ HELP = (
     "1️⃣ Ilovada videoning «Ulashish» → «Havolani nusxalash» tugmasini bosing.\n"
     "2️⃣ Havolani shu yerga yuboring.\n"
     "3️⃣ Bir necha soniyada fayl tayyor bo'ladi.\n\n"
+    "📹 Videoda bir nechta sifat bo'lsa, 360p dan 2K gacha tanlash tugmalari chiqadi.\n"
     "🎬 Video ostidagi <b>«🎵 MP3»</b> tugmasi orqali uning audiosini ham olasiz.\n"
-    "▶️ YouTube havolasida format tanlash tugmalari chiqadi.\n"
     "👥 Botni guruhga qo'shsangiz, guruhdagi havolalarni ham yuklab beradi.\n\n"
     "ℹ️ Fayl hajmi chegarasi: {max_mb} MB. Yopiq (private) akkauntlardagi kontent yuklanmaydi."
 )
@@ -25,8 +25,9 @@ HELP = (
 CONTACT_LINE = "\n\n📩 Murojaat va mualliflik huquqi (DMCA) bo'yicha: {contact}"
 
 SEND_LINK = "🔗 Iltimos, video yoki post havolasini yuboring."
-CHOOSE_FORMAT = "Qaysi formatda yuklab beray?"
-BTN_VIDEO = "🎬 Video"
+CHOOSE_QUALITY = "👇 Sifatni tanlang:"
+QUALITY_TOO_BIG = "⚠️ {names} — {max_mb} MB dan katta, Telegram cheklovi sababli yuborib bo'lmaydi."
+CHECKING = "🔎 Havola tekshirilmoqda..."
 BTN_AUDIO = "🎵 MP3"
 LINK_EXPIRED = "Havola eskirgan, uni qaytadan yuboring."
 

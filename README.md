@@ -10,9 +10,10 @@ audioni asl sifatda, suv belgisiz** yuklab beradi.
 |---|---|
 | 🎬 **Suv belgisiz video** | TikTok'da logotip va `@akkaunt` yozuvi tushirilgan format tanlanmaydi. Instagram'dan asl fayl olinadi. Izohdagi "Video by username" kabi akkaunt nomi olib tashlanadi. |
 | 🖼 **Rasmlar va karusellar** | Instagram post/karusel, TikTok foto-postlar, Pinterest, X rasmlari albom qilib yuboriladi (gallery-dl). |
-| 🎵 **MP3** | Har bir video ostida «🎵 MP3» tugmasi bor. YouTube'da avval format so'raladi. MP3 muqova rasmi va nomi bilan keladi. |
+| 📹 **Sifat tanlash** | Videoda bir nechta sifat bo'lsa (YouTube, Facebook, Vimeo, X ...), tugmalar chiqadi: 360p, 480p, 720p, 1080p, 2K — har birining hajmi bilan. Telegram chegarasiga sig'maydiganlari alohida yoziladi. Bitta sifatli videolar (TikTok va ko'p reels) darhol yuklanadi. |
+| 🎵 **MP3** | Sifat tanlovida va har bir video ostida «🎵 MP3» tugmasi bor. MP3 muqova rasmi va nomi bilan keladi. |
 | ⚡ **Kesh** | Bir xil havola qayta yuborilsa, fayl qayta yuklanmaydi va bir zumda jo'natiladi (Telegram `file_id`). |
-| 📦 **Hajmga mos sifat** | Video 50 MB ga sig'masa, avtomatik 480p/360p tanlanadi. MP3 bitreyti uzunligiga qarab moslashadi. |
+| 📦 **Hajmga mos sifat** | Tanlov bo'lmagan holatda video 50 MB ga sig'masa, avtomatik 480p/360p tanlanadi. MP3 bitreyti uzunligiga qarab moslashadi. |
 | 🕒 **Navbat** | Server bo'yicha bir vaqtda `MAX_PARALLEL` ta yuklash ketadi, qolganlar navbatda o'z o'rnini ko'radi. Bitta foydalanuvchi serverni band qilib qo'ya olmaydi. |
 | 📊 **Jarayon** | «⏳ Yuklanmoqda: 45%» ko'rinishida holat ko'rsatiladi. |
 | 👥 **Guruhlar** | Guruhga qo'shilsa, tanish platformalardagi havolalarni yuklab beradi (oddiy havolalarga javob bermaydi). |
@@ -74,7 +75,9 @@ shu sababli serverni Yevropada (Germaniya/Niderlandiya) olgan ma'qul. Foydalanuv
 | `ADMIN_IDS` | — | Admin ID lari, vergul bilan |
 | `MAX_PARALLEL` | 4 | Bir vaqtda nechta yuklash |
 | `PER_USER_LIMIT` | 2 | Bitta foydalanuvchi bir vaqtda nechta yuklay oladi |
-| `VIDEO_QUALITY` | 720 | 1080 / 720 / 480. Vertikal videoda kichik tomoni olinadi |
+| `ASK_QUALITY` | 1 | Sifat tanlash tugmalari (0 — darhol avtomatik sifatda yuklash) |
+| `MAX_QUALITY` | 1440 | Tanlovdagi eng yuqori sifat: 1080 / 1440 (2K) / 2160 (4K) |
+| `VIDEO_QUALITY` | 720 | Tanlov bo'lmaganda avtomatik sifat |
 | `MAX_DURATION` | 10800 | Maksimal davomiylik (soniya) |
 | `DOWNLOAD_TIMEOUT` | 900 | Bitta yuklash uchun vaqt (soniya) |
 | `CACHE_DAYS` | 30 | Kesh muddati |
@@ -101,9 +104,22 @@ Bitta faylga bir nechta sayt cookie'larini (Instagram + YouTube) qo'shish mumkin
 YouTube ba'zan server IP'sini bloklaydi ("Sign in to confirm you're not a bot"). Yechim: cookies
 (yuqoridagidek) yoki `PROXY`. YouTube uchun kerakli JavaScript runtime (deno) avtomatik o'rnatiladi.
 
-### 50 MB chegarasi va Local Bot API
-Oddiy Bot API orqali bot 50 MB dan katta fayl yubora olmaydi. Bot sifatni avtomatik pasaytiradi,
-lekin uzun videolar baribir sig'maydi. 2 GB gacha yuborish uchun:
+### 50 MB chegarasi, 1080p/2K va Local Bot API
+Bu botning emas, **Telegram'ning cheklovi**: rasmiy Bot API orqali har qanday bot 50 MB dan katta
+fayl yubora olmaydi. Taxminiy hajmlar (YouTube):
+
+| Sifat | 1 daqiqa | 5 daqiqa | 10 daqiqa |
+|---|---|---|---|
+| 720p | ~8 MB | ~40 MB | ~80 MB |
+| 1080p | ~15 MB | ~75 MB | ~150 MB |
+| 2K | ~35 MB | ~170 MB | ~350 MB |
+
+Ya'ni oddiy rejimda 1080p va 2K faqat qisqa videolar uchun ishlaydi; bot sig'maydigan sifatlarni
+tanlovda "50 MB dan katta" deb ko'rsatadi. **2K ni to'liq ishlatish uchun Local Bot API shart** —
+u bilan chegara 2 GB bo'ladi (`docker-compose.yml` da tayyor). Bunda diskka e'tibor bering:
+bir vaqtda `MAX_PARALLEL` ta yuklash × 2 GB gacha vaqtinchalik joy kerak (40 GB+ disk tavsiya etiladi).
+
+Yoqish:
 1. https://my.telegram.org → API development tools dan `api_id` va `api_hash` oling.
 2. Botni rasmiy serverdan chiqaring (bir marta): `https://api.telegram.org/bot<TOKEN>/logOut` ni brauzerda oching.
 3. `.env` ga yozing:

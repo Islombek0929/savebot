@@ -28,6 +28,8 @@ def server(tmp_path_factory):
     root = tmp_path_factory.mktemp("www")
     _make_video(str(root / "clean.mp4"), "green")
     _make_video(str(root / "watermarked.mp4"), "red")
+    _make_video(str(root / "v360.mp4"), "yellow", "640x360")
+    _make_video(str(root / "v720.mp4"), "white", "1280x720")
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x64",
                     "-frames:v", "1", str(root / "photo.jpg")], check=True)
     (root / "page.html").write_text("<html><body>video yo'q</body></html>")
@@ -155,3 +157,51 @@ async def test_youtube_playlist_rejected(cfg, tmp_path, monkeypatch):
     with pytest.raises(DownloadError) as e:
         await Downloader(cfg).download("https://www.youtube.com/playlist?list=PL1", "video", str(tmp_path))
     assert e.value.code == "unsupported"
+
+
+def _multi_quality(base):
+    def fake_extract(self, url, download=True, **kw):
+        info = {
+            "id": "yt1", "title": "Kino", "duration": 2, "extractor": "youtube",
+            "extractor_key": "Youtube", "webpage_url": url,
+            "formats": [
+                {"format_id": "18", "url": f"{base}/v360.mp4", "ext": "mp4", "vcodec": "avc1",
+                 "acodec": "mp4a", "width": 640, "height": 360},
+                {"format_id": "22", "url": f"{base}/v720.mp4", "ext": "mp4", "vcodec": "avc1",
+                 "acodec": "mp4a", "width": 1280, "height": 720},
+            ],
+        }
+        return self.process_ie_result(info, download=download)
+    return fake_extract
+
+
+async def test_probe_lists_qualities(server, cfg, monkeypatch):
+    base, _ = server
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", _multi_quality(base))
+    probe = await Downloader(cfg).probe("https://youtu.be/yt1")
+    assert [o.label for o in probe.options] == [360, 720]
+    assert probe.title == "Kino" and probe.duration == 2
+
+
+@pytest.mark.parametrize("quality,expected", [(360, "v360.mp4"), (720, "v720.mp4"), (1080, "v720.mp4")])
+async def test_download_chosen_quality(server, cfg, tmp_path, monkeypatch, quality, expected):
+    base, root = server
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", _multi_quality(base))
+    result = await Downloader(cfg).download("https://youtu.be/yt1", "video", str(tmp_path),
+                                            quality=quality)
+    assert md5(result.files[0].path) == md5(root / expected)
+
+
+async def test_download_reuses_probe_info(server, cfg, tmp_path, monkeypatch):
+    """probe() dan keyin yuklashda sayt qayta so'ralmaydi (Instagram/TikTok bloklamasligi uchun)."""
+    base, root = server
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", _multi_quality(base))
+    dl = Downloader(cfg)
+    probe = await dl.probe("https://youtu.be/yt1")
+
+    def boom(*a, **k):
+        raise AssertionError("qayta extract qilinmasligi kerak")
+
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", boom)
+    result = await dl.download("https://youtu.be/yt1", "video", str(tmp_path), info=probe.info)
+    assert md5(result.files[0].path) == md5(root / "v720.mp4")

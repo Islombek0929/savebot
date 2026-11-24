@@ -21,7 +21,14 @@ from .db import Database
 from .downloader import Downloader, versions
 from .handlers import admin, user
 from .middlewares import UserMiddleware
-from .services import AppState, Deps, DownloadQueue, SubscriptionChecker, parse_channels
+from .services import (
+    AppState,
+    Deps,
+    DownloadQueue,
+    ProbeCache,
+    SubscriptionChecker,
+    parse_channels,
+)
 
 log = logging.getLogger("savebot")
 
@@ -38,6 +45,7 @@ async def build(cfg: Config, bot: Bot, db: Database) -> Dispatcher:
         downloader=downloader,
         subs=SubscriptionChecker(parse_channels(cfg.required_channels)),
         app_state=AppState(),
+        probes=ProbeCache(),
         user_mw=user_mw,
         deps=Deps(bot=bot, cfg=cfg, db=db, downloader=downloader, queue=queue),
     )

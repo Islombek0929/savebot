@@ -4,11 +4,11 @@ from savebot.downloader import (
     classify_error,
     clean_title,
     find_url,
+    is_audio_site,
     is_public_url,
     normalize_url,
     platform_of,
     prefers_gallery,
-    wants_format_choice,
 )
 
 
@@ -63,9 +63,8 @@ def test_normalize_keeps_query_for_unknown_sites():
 
 
 def test_format_choice_and_gallery():
-    assert wants_format_choice("https://youtu.be/abc")
-    assert not wants_format_choice("https://music.youtube.com/watch?v=abc")
-    assert not wants_format_choice("https://instagram.com/reel/abc")
+    assert is_audio_site("https://music.youtube.com/watch?v=abc")
+    assert not is_audio_site("https://youtu.be/abc")
     assert prefers_gallery("https://www.tiktok.com/@u/photo/123")
     assert prefers_gallery("https://www.instagram.com/p/ABC/")
     assert not prefers_gallery("https://www.instagram.com/reel/ABC/")

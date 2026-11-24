@@ -30,6 +30,10 @@ class Config:
     per_user_limit: int = 2
     # Video sifati (eng kichik tomoni bo'yicha: 720 => 720p, vertikal videolar uchun ham to'g'ri)
     video_quality: int = 720
+    # Havola kelganda sifat tanlash tugmalarini ko'rsatish (360p ... 2K)
+    ask_quality: bool = True
+    # Tanlovda ko'rsatiladigan eng yuqori sifat: 1440 = 2K, 2160 = 4K
+    max_quality: int = 1440
     # Videoning maksimal davomiyligi, soniya (0 — cheklovsiz)
     max_duration: int = 3 * 60 * 60
     # Bitta yuklash uchun maksimal vaqt, soniya
@@ -71,6 +75,8 @@ def load_config() -> Config:
         max_parallel=max(1, _int("MAX_PARALLEL", 4)),
         per_user_limit=max(1, _int("PER_USER_LIMIT", 2)),
         video_quality=_int("VIDEO_QUALITY", 720),
+        ask_quality=os.getenv("ASK_QUALITY", "1").strip() not in ("0", "false", "no"),
+        max_quality=_int("MAX_QUALITY", 1440),
         max_duration=_int("MAX_DURATION", 3 * 60 * 60),
         download_timeout=_int("DOWNLOAD_TIMEOUT", 15 * 60),
         cookies_file=os.getenv("COOKIES_FILE", "").strip() or None,

@@ -9,10 +9,12 @@ from aiogram.types import CallbackQuery, Message
 
 from .. import texts
 from ..config import Config
-from ..downloader import find_url, is_audio_site, is_known_platform, wants_format_choice
-from ..services import Deps, SubscriptionChecker, deliver, format_keyboard, link_key
+from ..downloader import find_url, is_known_platform
+from ..services import Deps, ProbeCache, SubscriptionChecker, deliver, handle_link
 
 log = logging.getLogger(__name__)
+
+
 def extract_url(message: Message) -> str | None:
     """Matn, izoh (caption) va yashirin havolalardan (text_link) URL topadi."""
     text = message.text or message.caption
@@ -68,23 +70,20 @@ async def _subscribed(bot: Bot, subs: SubscriptionChecker, chat_type: str, user_
     return True
 
 
-async def on_link(message: Message, url: str, deps: Deps, subs: SubscriptionChecker) -> None:
+async def on_link(message: Message, url: str, deps: Deps, subs: SubscriptionChecker,
+                  probes: ProbeCache) -> None:
     if message.chat.type != "private" and not is_known_platform(url):
         return  # guruhlarda har qanday havolaga (yangiliklar va h.k.) javob bermaymiz
     if not await _subscribed(deps.bot, subs, message.chat.type, message.from_user.id, message.answer):
         return
-    if wants_format_choice(url):
-        key = link_key(url)
-        await deps.db.link_put(key, url)
-        await message.reply(texts.CHOOSE_FORMAT, reply_markup=format_keyboard(key))
-        return
-    kind = "audio" if is_audio_site(url) else "video"
-    await deliver(deps, chat_id=message.chat.id, user_id=message.from_user.id, url=url,
-                  kind=kind, reply_to=message.message_id)
+    await handle_link(deps, probes, chat_id=message.chat.id, user_id=message.from_user.id,
+                      url=url, reply_to=message.message_id)
 
 
 async def on_format(cb: CallbackQuery, deps: Deps, subs: SubscriptionChecker) -> None:
-    _, code, key = cb.data.split(":", 2)
+    """fmt:a:KEY — MP3, fmt:v:KEY — video (avtomatik sifat), q:720:KEY — tanlangan sifat."""
+    prefix, code, key = cb.data.split(":", 2)
+    quality = int(code) if prefix == "q" and code.isdigit() else None
     url = await deps.db.link_get(key)
     if not url or not cb.message:
         await cb.answer(texts.LINK_EXPIRED, show_alert=True)
@@ -96,7 +95,7 @@ async def on_format(cb: CallbackQuery, deps: Deps, subs: SubscriptionChecker) ->
     await cb.answer()
     original = cb.message.reply_to_message
     await deliver(deps, chat_id=cb.message.chat.id, user_id=cb.from_user.id, url=url,
-                  kind="audio" if code == "a" else "video",
+                  kind="audio" if code == "a" else "video", quality=quality,
                   reply_to=original.message_id if original else None,
                   status=cb.message)
 
@@ -126,7 +125,7 @@ def get_router() -> Router:
     router.message.register(cmd_help, Command("help"))
     router.callback_query.register(on_check_sub, F.data == "check_sub")
     router.message.register(on_link, HasLink())
-    router.callback_query.register(on_format, F.data.startswith("fmt:"))
+    router.callback_query.register(on_format, F.data.startswith("fmt:") | F.data.startswith("q:"))
     router.callback_query.register(on_mp3, F.data.startswith("mp3:"))
     router.message.register(on_text, F.chat.type == "private", F.text)
     return router

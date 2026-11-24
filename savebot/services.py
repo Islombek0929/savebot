@@ -41,7 +41,12 @@ from .downloader import (
     is_public_url,
     normalize_url,
     platform_of,
+    FATAL_CODES,
+    Probe,
+    is_audio_site,
+    prefers_gallery,
     prepare_files,
+    quality_name,
 )
 
 log = logging.getLogger(__name__)
@@ -66,6 +71,8 @@ class DownloadQueue:
         self.waiting = 0
         self.active = 0
         self._users: dict[int, int] = {}
+        # Havolani tekshirish (probe) — yengil, lekin baribir cheklaymiz
+        self.probe_slots = asyncio.Semaphore(parallel * 2)
 
     def try_reserve(self, user_id: int) -> bool:
         if self._users.get(user_id, 0) >= self.per_user:
@@ -186,7 +193,7 @@ def shorten(text: str, limit: int) -> str:
 
 def make_caption(title: str, bot_username: str | None, show_title: bool = True) -> str:
     tail = f"📥 @{bot_username}" if bot_username else ""
-    title = html.escape(shorten(title, 200)) if (show_title and title) else ""
+    title = html.escape(shorten(title, 200), quote=False) if (show_title and title) else ""
     return "\n\n".join(x for x in (title, tail) if x)
 
 
@@ -206,13 +213,6 @@ def mp3_keyboard(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_AUDIO, callback_data=f"mp3:{key}")]]
     )
-
-
-def format_keyboard(key: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=texts.BTN_VIDEO, callback_data=f"fmt:v:{key}"),
-        InlineKeyboardButton(text=texts.BTN_AUDIO, callback_data=f"fmt:a:{key}"),
-    ]])
 
 
 async def safe_edit(msg: Message | None, text: str, **kw) -> None:
@@ -282,7 +282,7 @@ async def send_media(
     Qaytaradi: [(turi, file_id), ...] — keshga yozish uchun.
     """
     reply = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
-    timeout = 600  # katta fayllarni yuklash uchun
+    timeout = 1800  # katta fayllarni (Local Bot API bilan 2 GB gacha) yuklash uchun
     sent: list[tuple[str, str]] = []
     caption_used = False
 
@@ -378,8 +378,13 @@ async def deliver(
     kind: str,
     reply_to: int | None,
     status: Message | None = None,
+    quality: int | None = None,
+    info: dict | None = None,
+    ytdlp_error: DownloadError | None = None,
 ) -> bool:
-    """Havolani yuklab, foydalanuvchiga yuboradi. Muvaffaqiyatli bo'lsa True."""
+    """Havolani yuklab, foydalanuvchiga yuboradi. Muvaffaqiyatli bo'lsa True.
+
+    quality — tanlangan sifat (360/720/1080/1440...), None bo'lsa avtomatik."""
     platform = platform_of(url)
     me = await d.bot.me()
 
@@ -400,7 +405,7 @@ async def deliver(
     markup_for_single = mp3_keyboard(key) if kind == "video" else None
 
     # 1) Kesh: shu havola avval yuklangan bo'lsa — darhol yuboramiz
-    ckey = cache_key(kind, url)
+    ckey = cache_key(f"video{quality}" if kind == "video" and quality else kind, url)
     cached = await d.db.cache_get(ckey, d.cfg.cache_days)
     if cached:
         items = [Outgoing(k, fid) for k, fid in cached.items]
@@ -438,7 +443,8 @@ async def deliver(
                     chat_id, ChatAction.UPLOAD_VOICE if kind == "audio" else ChatAction.UPLOAD_VIDEO)
             ticker = asyncio.create_task(_progress_ticker(status, progress))
             result = await asyncio.wait_for(
-                d.downloader.download(url, kind, workdir, progress),
+                d.downloader.download(url, kind, workdir, progress, quality=quality,
+                                      info=info, ytdlp_error=ytdlp_error),
                 timeout=d.cfg.download_timeout + 120,
             )
             files = await prepare_files(result, d.cfg.max_bytes)
@@ -477,3 +483,129 @@ async def deliver(
     with contextlib.suppress(Exception):
         await d.db.log_download(user_id, platform, kind, ok)
     return ok
+
+
+# ----------------------------------------------------------------------------------
+# Sifat tanlash
+# ----------------------------------------------------------------------------------
+class ProbeCache:
+    """Sifatlar ro'yxatini qisqa muddat eslab qoladi (bir xil havolani qayta tekshirmaslik uchun)."""
+
+    def __init__(self, ttl: int = 1800, limit: int = 2000):
+        self.ttl = ttl
+        self.limit = limit
+        self._data: dict[str, tuple[float, Probe]] = {}
+
+    def get(self, url: str) -> Probe | None:
+        item = self._data.get(normalize_url(url))
+        if item and item[0] > time.monotonic():
+            return item[1]
+        return None
+
+    def put(self, url: str, probe: Probe) -> None:
+        if len(self._data) >= self.limit:
+            now = time.monotonic()
+            self._data = {k: v for k, v in self._data.items() if v[0] > now}
+            if len(self._data) >= self.limit:
+                self._data.clear()
+        # Og'ir "info" ni saqlamaymiz — faqat sifatlar va nomi
+        light = Probe(info={}, title=probe.title, duration=probe.duration, options=probe.options)
+        self._data[normalize_url(url)] = (time.monotonic() + self.ttl, light)
+
+
+def _mb(size: int | None) -> str:
+    if not size:
+        return ""
+    mb = size / 1024 / 1024
+    return f" · {mb:.0f} MB" if mb >= 10 else f" · {mb:.1f} MB"
+
+
+def _duration(sec: float | None) -> str:
+    if not sec:
+        return ""
+    sec = int(sec)
+    h, rest = divmod(sec, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def quality_picker(probe: Probe, key: str, cfg: Config) -> tuple[str, InlineKeyboardMarkup]:
+    """Sifat tanlash xabari: sig'adiganlari tugma, sig'maydiganlari izohda."""
+    fits = [o for o in probe.options if not o.size or o.size <= cfg.max_bytes]
+    too_big = [o for o in probe.options if o.size and o.size > cfg.max_bytes]
+
+    buttons = [InlineKeyboardButton(text=f"📹 {quality_name(o.label)}{_mb(o.size)}",
+                                    callback_data=f"q:{o.label}:{key}") for o in fits]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    mp3_size = int(probe.duration * 192_000 / 8) if probe.duration else None
+    rows.append([InlineKeyboardButton(text=f"{texts.BTN_AUDIO}{_mb(mp3_size)}",
+                                      callback_data=f"fmt:a:{key}")])
+
+    lines = []
+    if probe.title:
+        lines.append(f"🎬 <b>{html.escape(shorten(probe.title, 150), quote=False)}</b>")
+    if probe.duration:
+        lines.append(f"⏱ {_duration(probe.duration)}")
+    lines.append("")
+    lines.append(texts.CHOOSE_QUALITY)
+    if too_big:
+        names = ", ".join(quality_name(o.label) for o in too_big)
+        lines.append(texts.QUALITY_TOO_BIG.format(names=names, max_mb=cfg.max_mb))
+    return "\n".join(lines).strip(), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def handle_link(d: Deps, probes: ProbeCache, *, chat_id: int, user_id: int, url: str,
+                      reply_to: int | None) -> None:
+    """Yangi havola: kerak bo'lsa sifat tanlovini ko'rsatadi, aks holda darhol yuklaydi."""
+    common = dict(chat_id=chat_id, user_id=user_id, url=url, reply_to=reply_to)
+    if is_audio_site(url):
+        await deliver(d, kind="audio", **common)
+        return
+    if not d.cfg.ask_quality or prefers_gallery(url):
+        await deliver(d, kind="video", **common)
+        return
+    if not await is_public_url(url):
+        await deliver(d, kind="video", **common)  # deliver o'zi xato xabarini yuboradi
+        return
+    # Avval yuklangan (bitta sifatli) havola — keshdan darhol
+    if await d.db.cache_get(cache_key("video", url), d.cfg.cache_days):
+        await deliver(d, kind="video", **common)
+        return
+
+    key = link_key(url)
+    await d.db.link_put(key, url)
+    probe = probes.get(url)
+    status = None
+    if probe is None:
+        reply = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
+        status = await d.bot.send_message(chat_id, texts.CHECKING, reply_parameters=reply)
+        try:
+            async with d.queue.probe_slots:
+                probe = await asyncio.wait_for(d.downloader.probe(url), timeout=120)
+        except DownloadError as e:
+            if e.code in FATAL_CODES:
+                await safe_edit(status, error_text(e.code, d.cfg))
+                return
+            # yt-dlp tanimadi — rasm bo'lishi mumkin, gallery-dl bilan urinamiz
+            await deliver(d, kind="video", status=status, ytdlp_error=e, **common)
+            return
+        except asyncio.TimeoutError:
+            await safe_edit(status, texts.ERR_TIMEOUT)
+            return
+        except Exception:
+            log.exception("Probe xatosi: %s", url)
+            await safe_edit(status, texts.ERR_UNEXPECTED)
+            return
+
+    if len(probe.options) < 2:
+        # Tanlash uchun variant yo'q (TikTok, karusel, rasm...) — darhol yuklaymiz
+        await deliver(d, kind="video", status=status, info=probe.info or None, **common)
+        return
+
+    probes.put(url, probe)
+    text, markup = quality_picker(probe, key, d.cfg)
+    if status:
+        await safe_edit(status, text, reply_markup=markup)
+    else:
+        reply = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
+        await d.bot.send_message(chat_id, text, reply_markup=markup, reply_parameters=reply)

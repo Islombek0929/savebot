@@ -88,3 +88,53 @@ def test_audio_bitrate(duration, expected):
 def test_audio_too_long():
     with pytest.raises(DownloadError):
         audio_bitrate(5 * 3600, 50 * MB)
+
+
+# ---------------- sifat tanlash (360p ... 2K) ----------------
+from savebot.downloader import pick_quality, quality_label, quality_options  # noqa: E402
+
+
+@pytest.mark.parametrize("w,h,label", [
+    (1920, 1080, 1080), (1080, 1920, 1080), (1920, 800, 1080), (2560, 1440, 1440),
+    (1280, 720, 720), (720, 1280, 720), (854, 480, 480), (640, 360, 360), (576, 1024, 480),
+    (3840, 2160, 2160), (None, 720, 720),
+])
+def test_quality_label(w, h, label):
+    assert quality_label({"width": w, "height": h, "vcodec": "avc1"}) == label
+
+
+def youtube_full():
+    return youtube_formats() + [
+        {"format_id": "271", "url": "https://y/7", "ext": "webm", "vcodec": "vp9", "acodec": "none", "width": 2560, "height": 1440, "filesize": 300 * MB},
+        {"format_id": "400", "url": "https://y/8", "ext": "mp4", "vcodec": "av01.0.12M.08", "acodec": "none", "width": 2560, "height": 1440, "filesize": 250 * MB},
+        {"format_id": "313", "url": "https://y/9", "ext": "webm", "vcodec": "vp9", "acodec": "none", "width": 3840, "height": 2160, "filesize": 900 * MB},
+        {"format_id": "248", "url": "https://y/10", "ext": "webm", "vcodec": "vp9", "acodec": "none", "width": 1920, "height": 1080, "filesize": 150 * MB},
+    ]
+
+
+def test_quality_options_up_to_2k():
+    opts = quality_options(_info(youtube_full()), max_quality=1440)
+    assert [o.label for o in opts] == [360, 480, 720, 1080, 1440]  # 4K ko'rsatilmaydi
+    by = {o.label: o for o in opts}
+    assert by[720].format_id == "136+140" and by[720].size == 96 * MB
+    assert by[1080].format_id == "137+140"  # h264 vp9'dan afzal
+    assert by[1440].format_id == "271+140"  # vp9 av1'dan afzal (ko'proq qurilmada o'ynaydi)
+
+
+def test_quality_options_4k_when_allowed():
+    assert quality_options(_info(youtube_full()), max_quality=2160)[-1].label == 2160
+
+
+def test_quality_options_skip_watermarked():
+    opts = quality_options(_info(tiktok_formats()))
+    assert [(o.label, o.format_id) for o in opts] == [(1080, "play_addr-0")]
+
+
+def test_pick_quality():
+    info = _info(youtube_full())
+    assert pick_quality(info, 720, 2000 * MB, 1440) == "136+140"
+    assert pick_quality(info, 1440, 2000 * MB, 1440) == "271+140"
+    assert pick_quality(info, 600, 2000 * MB, 1440) == "135+140"  # yo'q bo'lsa — pastrog'i
+    with pytest.raises(DownloadError) as e:
+        pick_quality(info, 1080, 50 * MB, 1440)
+    assert e.value.code == "too_big"

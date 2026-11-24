@@ -21,7 +21,7 @@ import shutil
 import socket
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yt_dlp
@@ -192,12 +192,6 @@ def normalize_url(url: str) -> str:
     return urlunsplit(("https", host, path, new_query, ""))
 
 
-def wants_format_choice(url: str) -> bool:
-    """YouTube'da odamlar ko'pincha MP3 ham so'raydi — shuning uchun tanlov beramiz."""
-    host = _host(url)
-    return platform_of(url) == "youtube" and not host.startswith("music.")
-
-
 def is_audio_site(url: str) -> bool:
     host = _host(url)
     return host.startswith("music.youtube.") or platform_of(url) == "soundcloud" or host.endswith(
@@ -301,6 +295,115 @@ def choose_video_format(info: dict, max_bytes: int, quality: int) -> tuple[str, 
         if size is None or size <= max_bytes:
             return format_id, size
     raise DownloadError("too_big", f"{last_size} bytes")
+
+
+# (sifat, uzun tomon) — 1920x1080 ham, vertikal 1080x1920 ham, 1920x800 (kino) ham "1080p"
+_STANDARD = [(144, 256), (240, 426), (360, 640), (480, 854), (720, 1280), (1080, 1920),
+             (1440, 2560), (2160, 3840)]
+QUALITY_NAMES = {1440: "2K", 2160: "4K"}
+
+
+def quality_name(label: int) -> str:
+    return QUALITY_NAMES.get(label, f"{label}p")
+
+
+def quality_label(fmt: dict) -> int | None:
+    """Formatning sifat belgisi (360, 720, 1080, 1440 ...). Video bo'lmasa None."""
+    if fmt.get("vcodec") == "none":
+        return None
+    w, h = fmt.get("width"), fmt.get("height")
+    if not w and not h:
+        return None
+    if w and h:
+        short, long_ = min(w, h), max(w, h)
+    else:  # faqat bittasi ma'lum — odatiy gorizontal video deb hisoblaymiz
+        short = h or w
+        long_ = short * 16 / 9
+    label = None
+    for p, l in _STANDARD:
+        if short >= p * 0.9 or long_ >= l * 0.9:
+            label = p
+    return label
+
+
+def _is_watermarked(fmt: dict) -> bool:
+    return ("watermark" in (fmt.get("format_note") or "").lower()
+            or (fmt.get("format_id") or "").startswith("download"))
+
+
+def _codec_rank(fmt: dict) -> int:
+    v = (fmt.get("vcodec") or "").lower()
+    if v.startswith(("avc", "h264")):
+        return 3  # hamma qurilmada o'ynaydi
+    if v.startswith(("vp9", "vp09")):
+        return 2
+    if v.startswith(("hev", "hvc", "h265")):
+        return 1
+    return 0  # av1 va noma'lum — eski telefonlarda o'ynamasligi mumkin
+
+
+@dataclass
+class QualityOption:
+    label: int
+    format_id: str
+    size: int | None
+
+
+def quality_options(info: dict, max_quality: int = 2160) -> list[QualityOption]:
+    """Videoda mavjud sifatlar (suv belgisiz), har biri uchun format va taxminiy hajm.
+
+    yt-dlp formatlarni yomondan yaxshiga qarab tartiblaydi — tenglikda keyingisi afzal.
+    """
+    formats = [f for f in info.get("formats") or [] if f.get("format_id")]
+    duration = info.get("duration")
+    audios = [(i, f) for i, f in enumerate(formats)
+              if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")]
+    best_audio = max(audios, key=lambda x: (
+        (x[1].get("acodec") or "").startswith("mp4a") or x[1].get("ext") == "m4a", x[0]),
+        default=(None, None))[1]
+
+    by_label: dict[int, tuple] = {}
+    for i, f in enumerate(formats):
+        label = quality_label(f)
+        if label is None or label > max_quality or _is_watermarked(f):
+            continue
+        rank = (_codec_rank(f), f.get("ext") == "mp4", i)
+        if label not in by_label or rank > by_label[label][0]:
+            by_label[label] = (rank, f)
+
+    options = []
+    for label, (_, f) in sorted(by_label.items()):
+        video_size = _size_of({**f, "duration": duration})
+        if f.get("acodec") == "none" and best_audio:
+            audio_size = _size_of({**best_audio, "duration": duration})
+            fmt = f"{f['format_id']}+{best_audio['format_id']}"
+            size = video_size + audio_size if video_size and audio_size else None
+        else:
+            fmt, size = f["format_id"], video_size
+        options.append(QualityOption(label, fmt, size))
+    return options
+
+
+def pick_quality(info: dict, label: int, max_bytes: int, max_quality: int) -> str:
+    """Tanlangan sifat formatini qaytaradi (bo'lmasa — undan pastroq eng yaqinini)."""
+    options = quality_options(info, max_quality)
+    lower = [o for o in options if o.label <= label] or options
+    if not lower:
+        raise DownloadError("not_found", "video formatlari yo'q")
+    chosen = lower[-1]
+    if chosen.size and chosen.size > max_bytes:
+        raise DownloadError("too_big", f"{quality_name(chosen.label)} {chosen.size}")
+    return chosen.format_id
+
+
+@dataclass
+class Probe:
+    """Havola haqida yuklamasdan olingan ma'lumot (sifat tanlash uchun)."""
+
+    info: dict
+    title: str
+    duration: float | None
+    options: list[QualityOption]
 
 
 def audio_bitrate(duration: float | None, max_bytes: int) -> int:
@@ -446,25 +549,45 @@ class _Ctx:
     workdir: str
     progress: Progress
     deadline: float
-    meta: dict = field(default_factory=dict)
+    quality: int | None = None  # foydalanuvchi tanlagan sifat (None — avtomatik)
+    info: dict | None = None  # probe() natijasi — qayta so'rov yubormaslik uchun
 
 
 class Downloader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
+    async def probe(self, url: str) -> Probe:
+        """Yuklamasdan ma'lumot oladi: nomi, davomiyligi va mavjud sifatlar."""
+        ctx = _Ctx(url, "video", "", Progress(), time.monotonic() + 90)
+        return await asyncio.to_thread(self._probe_sync, ctx)
+
+    def _probe_sync(self, ctx: _Ctx) -> Probe:
+        info, entries, duration = self._extract(ctx)
+        options = []
+        if len(entries) == 1:
+            options = quality_options(entries[0], self.cfg.max_quality)
+        title = clean_title(entries[0] if len(entries) == 1 else info)
+        return Probe(info=info, title=title, duration=duration, options=options)
+
     async def download(self, url: str, kind: str, workdir: str,
-                       progress: Progress | None = None) -> Result:
+                       progress: Progress | None = None, *, quality: int | None = None,
+                       info: dict | None = None,
+                       ytdlp_error: DownloadError | None = None) -> Result:
+        """quality — tanlangan sifat; info — probe() natijasi; ytdlp_error — probe'da yt-dlp
+        xato bergan bo'lsa, uni qayta urinmasdan to'g'ridan-to'g'ri gallery-dl ga o'tamiz."""
         ctx = _Ctx(url, kind, workdir, progress or Progress(),
-                   time.monotonic() + self.cfg.download_timeout)
+                   time.monotonic() + self.cfg.download_timeout, quality=quality, info=info)
         if kind == "audio":
             order = [self._ytdlp]
+        elif ytdlp_error is not None:
+            order = [self._gallery]
         elif prefers_gallery(url):
             order = [self._gallery, self._ytdlp]
         else:
             order = [self._ytdlp, self._gallery]
 
-        first_error: DownloadError | None = None
+        first_error: DownloadError | None = ytdlp_error
         for method in order:
             try:
                 result = await method(ctx)
@@ -521,24 +644,34 @@ class Downloader:
     async def _ytdlp(self, ctx: _Ctx) -> Result:
         return await asyncio.to_thread(self._ytdlp_sync, ctx)
 
+    def _extract(self, ctx: _Ctx) -> tuple[dict, list[dict], float | None]:
+        """Ma'lumot olish (yuklamasdan) va tekshirish: pleylist, jonli efir, davomiylik."""
+        info = ctx.info
+        if info is None:
+            try:
+                with yt_dlp.YoutubeDL({**self._base_opts(ctx), "format": "bv*+ba/b*"}) as ydl:
+                    info = ydl.extract_info(ctx.url, download=False)
+            except yt_dlp.utils.YoutubeDLError as e:
+                raise DownloadError(classify_error(str(e)), str(e)[:500])
+        if not info:
+            raise DownloadError("not_found")
+        if info.get("_type") == "playlist" and platform_of(ctx.url) in ("youtube", "soundcloud", "vk"):
+            raise DownloadError("unsupported", "pleylist")  # 10 ta videoni birdan yuklamaymiz
+        entries = _entries(info)
+        if not entries:
+            raise DownloadError("not_found", "entries yo'q")
+        if any(e.get("is_live") for e in entries):
+            raise DownloadError("live")
+        duration = sum(e.get("duration") or 0 for e in entries) or None
+        if self.cfg.max_duration and duration and duration > self.cfg.max_duration:
+            raise DownloadError("too_long", f"{duration}s")
+        return info, entries, duration
+
     def _ytdlp_sync(self, ctx: _Ctx) -> Result:
         base = self._base_opts(ctx)
         try:
-            # 1) Ma'lumot olish (yuklamasdan): jonli efir, davomiylik va hajmni tekshirish
-            with yt_dlp.YoutubeDL({**base, "format": "bv*+ba/b*"}) as ydl:
-                info = ydl.extract_info(ctx.url, download=False)
-            if not info:
-                raise DownloadError("not_found")
-            if info.get("_type") == "playlist" and platform_of(ctx.url) in ("youtube", "soundcloud", "vk"):
-                raise DownloadError("unsupported", "pleylist")  # 10 ta videoni birdan yuklamaymiz
-            entries = _entries(info)
-            if not entries:
-                raise DownloadError("not_found", "entries yo'q")
-            if any(e.get("is_live") for e in entries):
-                raise DownloadError("live")
-            duration = sum(e.get("duration") or 0 for e in entries) or None
-            if self.cfg.max_duration and duration and duration > self.cfg.max_duration:
-                raise DownloadError("too_long", f"{duration}s")
+            # 1) Ma'lumot olish (yoki probe() natijasidan foydalanish)
+            info, entries, duration = self._extract(ctx)
 
             # 2) Format tanlash va yuklash
             opts = dict(base)
@@ -557,7 +690,10 @@ class Downloader:
                     ],
                 })
             else:
-                if len(entries) == 1 and entries[0].get("formats"):
+                if len(entries) == 1 and entries[0].get("formats") and ctx.quality:
+                    fmt = pick_quality(entries[0], ctx.quality, self.cfg.max_bytes,
+                                       self.cfg.max_quality)
+                elif len(entries) == 1 and entries[0].get("formats"):
                     fmt, _ = choose_video_format(entries[0], self.cfg.max_bytes,
                                                  self.cfg.video_quality)
                 else:

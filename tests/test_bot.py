@@ -32,7 +32,9 @@ from aiogram.types import (
 )
 
 from savebot.__main__ import build
-from savebot.downloader import DownloadError, MediaFile, Result
+from savebot.downloader import DownloadError, MediaFile, Probe, QualityOption, Result
+
+MB = 1024 * 1024
 
 NOW = datetime.datetime.now()
 BOT_USER = User(id=42, is_bot=True, first_name="Save", username="save_test_bot")
@@ -107,9 +109,22 @@ class FakeDownloader:
         self.kinds = kinds
         self.error = error
         self.calls = []
+        self.kwargs = []
+        self.probe_calls = 0
+        # Standart: bitta sifat (TikTok/Instagram kabi) — tanlov chiqmaydi
+        self.probe_result = Probe(info={"id": "x"}, title="T", duration=30,
+                                  options=[QualityOption(1080, "play", 5 * MB)])
+        self.probe_error = None
 
-    async def download(self, url, kind, workdir, progress=None):
+    async def probe(self, url):
+        self.probe_calls += 1
+        if self.probe_error:
+            raise DownloadError(self.probe_error)
+        return self.probe_result
+
+    async def download(self, url, kind, workdir, progress=None, **kw):
         self.calls.append((url, kind))
+        self.kwargs.append(kw)
         if self.error:
             raise DownloadError(self.error)
         files = []
@@ -197,15 +212,97 @@ async def test_mp3_button(env):
     assert audio.performer == "Art"
 
 
-async def test_youtube_asks_format_then_downloads(env):
+def youtube_probe():
+    return Probe(info={}, title="Zo'r <klip>", duration=245, options=[
+        QualityOption(360, "18", 12 * MB), QualityOption(480, "135+140", 25 * MB),
+        QualityOption(720, "136+140", 45 * MB), QualityOption(1080, "137+140", 98 * MB),
+        QualityOption(1440, "271+140", 210 * MB),
+    ])
+
+
+async def test_quality_picker_shown_and_used(env):
     dp, bot, session, fake = env
+    fake.probe_result = youtube_probe()
     await dp.feed_update(bot, message("https://youtu.be/dQw4w9WgXcQ"))
     assert not fake.calls
-    kb = session.of(SendMessage)[0].reply_markup.inline_keyboard[0]
-    assert [b.text for b in kb] == ["🎬 Video", "🎵 MP3"]
-    await dp.feed_update(bot, callback(kb[1].callback_data))
-    assert fake.calls == [("https://youtu.be/dQw4w9WgXcQ", "audio")]
-    assert session.of(SendAudio)
+    picker = session.of(EditMessageText)[-1]
+    rows = picker.reply_markup.inline_keyboard
+    texts_ = [b.text for row in rows for b in row]
+    assert texts_ == ["📹 360p · 12 MB", "📹 480p · 25 MB", "📹 720p · 45 MB", "🎵 MP3 · 5.6 MB"]
+    assert "Zo'r &lt;klip&gt;" in picker.text and "4:05" in picker.text
+    assert "1080p, 2K — 50 MB dan katta" in picker.text
+    await dp.feed_update(bot, callback(rows[1][0].callback_data))  # 720p
+    assert fake.calls == [("https://youtu.be/dQw4w9WgXcQ", "video")]
+    assert fake.kwargs[0]["quality"] == 720
+    assert session.of(SendVideo)
+
+
+async def test_2k_offered_with_local_api(cfg, db, monkeypatch):
+    from dataclasses import replace
+    cfg = replace(cfg, max_mb=2000, local_api_url="http://telegram-bot-api:8081")
+    os.makedirs(cfg.tmp_dir, exist_ok=True)
+    monkeypatch.setattr("savebot.downloader.probe_video", _noprobe)
+    session = MockSession()
+    bot = Bot("42:TEST", session=session)
+    dp = await build(cfg, bot, db)
+    fake = FakeDownloader()
+    fake.probe_result = youtube_probe()
+    dp["deps"].downloader = fake
+
+    async def public(url):
+        return True
+    monkeypatch.setattr("savebot.services.is_public_url", public)
+    await dp.feed_update(bot, message("https://youtu.be/abc"))
+    picker = session.of(EditMessageText)[-1]
+    labels = [b.text for row in picker.reply_markup.inline_keyboard for b in row]
+    assert "📹 2K · 210 MB" in labels and "📹 1080p · 98 MB" in labels
+    assert "katta" not in picker.text
+
+
+async def test_quality_cache_separate_and_picker_cached(env):
+    dp, bot, session, fake = env
+    fake.probe_result = youtube_probe()
+    url = "https://youtu.be/dQw4w9WgXcQ"
+    await dp.feed_update(bot, message(url, mid=1))
+    data360 = session.of(EditMessageText)[-1].reply_markup.inline_keyboard[0][0].callback_data
+    await dp.feed_update(bot, callback(data360))
+    await dp.feed_update(bot, message(url, mid=2))  # sifatlar ro'yxati xotiradan
+    assert fake.probe_calls == 1
+    picker2 = session.of(SendMessage)[-1]
+    data720 = picker2.reply_markup.inline_keyboard[1][0].callback_data
+    await dp.feed_update(bot, callback(data720))
+    assert len(fake.calls) == 2  # 720p alohida yuklanadi (360p keshi unga berilmaydi)
+    await dp.feed_update(bot, callback(data360))
+    assert len(fake.calls) == 2  # 360p esa keshdan
+
+
+async def test_single_quality_downloads_immediately_with_probe_info(env):
+    dp, bot, session, fake = env
+    await dp.feed_update(bot, message("https://www.tiktok.com/@u/video/1"))
+    assert fake.calls == [("https://www.tiktok.com/@u/video/1", "video")]
+    assert fake.kwargs[0]["info"] == {"id": "x"}  # sayt qayta so'ralmaydi
+    assert session.of(SendVideo)
+
+
+async def test_probe_failure_falls_back_to_gallery(env):
+    dp, bot, session, fake = env
+    fake.probe_error = "unsupported"
+    await dp.feed_update(bot, message("https://x.com/u/status/1"))
+    assert fake.kwargs[0]["ytdlp_error"].code == "unsupported"
+
+
+async def test_probe_live_error(env):
+    dp, bot, session, fake = env
+    fake.probe_error = "live"
+    await dp.feed_update(bot, message("https://youtu.be/live1"))
+    assert not fake.calls
+    assert any("Jonli efir" in c.text for c in session.of(EditMessageText))
+
+
+async def test_music_site_goes_straight_to_mp3(env):
+    dp, bot, session, fake = env
+    await dp.feed_update(bot, message("https://music.youtube.com/watch?v=abc"))
+    assert fake.calls == [("https://music.youtube.com/watch?v=abc", "audio")] and not fake.probe_calls
 
 
 async def test_album_for_carousel(env):
@@ -264,7 +361,7 @@ async def test_per_user_limit(env):
     assert queue.try_reserve(USER.id)  # limit = 1, allaqachon band
     await dp.feed_update(bot, message("https://www.instagram.com/reel/NEW/"))
     assert not fake.calls
-    assert any("kuting" in c.text for c in session.of(SendMessage))
+    assert any("kuting" in c.text for c in session.of(SendMessage) + session.of(EditMessageText))
     queue.release(USER.id)
 
 
