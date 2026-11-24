@@ -11,8 +11,10 @@ from savebot import dnsfix
 @pytest.fixture(autouse=True)
 def clean_cache():
     dnsfix._cache.clear()
+    dnsfix._doh_first.clear()
     yield
     dnsfix._cache.clear()
+    dnsfix._doh_first.clear()
 
 
 def fake_system(blocked):
@@ -86,3 +88,24 @@ def test_gethostbyname_fallback(monkeypatch):
     assert dnsfix._gethostbyname("instagram.ftas2-2.fna.fbcdn.net") == "84.54.107.98"
     with pytest.raises(socket.gaierror):
         dnsfix._gethostbyname("localhost")
+
+
+def test_after_one_failure_same_domain_skips_slow_system_dns(monkeypatch):
+    system_calls = []
+
+    def slow_failing(host, port, family=0, type=0, proto=0, flags=0):
+        system_calls.append(host)
+        if host.endswith("fbcdn.net"):
+            raise socket.gaierror(-3, "Temporary failure in name resolution")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (host, port))]
+
+    monkeypatch.setattr(dnsfix, "_original_getaddrinfo", slow_failing)
+    monkeypatch.setattr(dnsfix, "doh_query", lambda name, timeout=5.0: ["84.54.107.98"])
+    dnsfix._getaddrinfo("instagram.ftas2-2.fna.fbcdn.net", 443)
+    assert "instagram.ftas2-2.fna.fbcdn.net" in system_calls
+    system_calls.clear()
+    res = dnsfix._getaddrinfo("instagram.ftas2-1.fna.fbcdn.net", 443)  # boshqa server, o'sha domen
+    assert res[0][4][0] == "84.54.107.98"
+    assert "instagram.ftas2-1.fna.fbcdn.net" not in system_calls  # tizim DNS kutilmadi
+    dnsfix._getaddrinfo("api.telegram.org", 443)  # boshqa domenlar odatdagidek
+    assert "api.telegram.org" in system_calls

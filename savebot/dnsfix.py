@@ -32,6 +32,10 @@ DOH_SERVERS = (
 _original_getaddrinfo = socket.getaddrinfo
 _original_gethostbyname = socket.gethostbyname
 _cache: dict[str, tuple[float, list[str]]] = {}
+# Tizim DNS i ishlamagan domenlar (masalan fbcdn.net) -> muddat. Bu domendagi boshqa nomlar uchun
+# tizim DNS ni kutmaymiz: u xato berguncha 10-20 soniya o'tishi mumkin.
+_doh_first: dict[str, float] = {}
+DOH_FIRST_SECONDS = 3600
 _lock = threading.Lock()
 _installed = False
 
@@ -73,25 +77,43 @@ def resolve(name: str) -> list[str]:
     return doh_query(name)
 
 
+def _domain(name: str) -> str:
+    """Asosiy domen: instagram.ftas2-2.fna.fbcdn.net -> fbcdn.net"""
+    return ".".join(name.split(".")[-2:])
+
+
+def _doh_preferred(name: str) -> bool:
+    until = _doh_first.get(_domain(name))
+    return until is not None and until > time.monotonic()
+
+
+def _doh_addrinfo(name, port, type, proto, flags) -> list:
+    results = []
+    for ip in resolve(name):
+        try:
+            results += _original_getaddrinfo(ip, port, socket.AF_INET, type, proto, flags)
+        except socket.gaierror:
+            continue
+    return results
+
+
 def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    name = _fallback_name(host)
+    if name and family != socket.AF_INET6 and _doh_preferred(name):
+        results = _doh_addrinfo(name, port, type, proto, flags)
+        if results:
+            return results
     try:
         return _original_getaddrinfo(host, port, family, type, proto, flags)
     except socket.gaierror:
-        name = _fallback_name(host)
         if name is None or family == socket.AF_INET6:
             raise
-        ips = resolve(name)
-        if not ips:
-            raise
-        log.info("DNS zaxirasi (DoH): %s -> %s", name, ips[0])
-        results = []
-        for ip in ips:
-            try:
-                results += _original_getaddrinfo(ip, port, socket.AF_INET, type, proto, flags)
-            except socket.gaierror:
-                continue
+        results = _doh_addrinfo(name, port, type, proto, flags)
         if not results:
             raise
+        _doh_first[_domain(name)] = time.monotonic() + DOH_FIRST_SECONDS
+        log.info("DNS zaxirasi (DoH): %s -> %s (%s uchun 1 soat DoH birinchi)",
+                 name, results[0][4][0], _domain(name))
         return results
 
 
@@ -102,13 +124,18 @@ def _fallback_name(host) -> str | None:
 
 
 def _gethostbyname(host):
+    name = _fallback_name(host)
+    if name and _doh_preferred(name):
+        ips = resolve(name)
+        if ips:
+            return ips[0]
     try:
         return _original_gethostbyname(host)
     except socket.gaierror:
-        name = _fallback_name(host)
         ips = resolve(name) if name else []
         if not ips:
             raise
+        _doh_first[_domain(name)] = time.monotonic() + DOH_FIRST_SECONDS
         log.info("DNS zaxirasi (DoH): %s -> %s", name, ips[0])
         return ips[0]
 
