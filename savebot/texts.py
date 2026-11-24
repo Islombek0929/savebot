@@ -134,6 +134,11 @@ _T: dict[str, dict[str, str]] = {
         "ru": "⏳ Сайт временно ограничил доступ. Попробуйте чуть позже.",
         "en": "⏳ The site is temporarily limiting requests. Please try again a bit later.",
     },
+    "ERR_NETWORK": {
+        "uz": "🌐 Serverda tarmoq muammosi. Birozdan keyin qayta urinib ko'ring.",
+        "ru": "🌐 Проблема с сетью на сервере. Попробуйте чуть позже.",
+        "en": "🌐 Server network problem. Please try again a bit later.",
+    },
     "ERR_UNSUPPORTED": {
         "uz": "❌ Bu havola qo'llab-quvvatlanmaydi.",
         "ru": "❌ Эта ссылка не поддерживается.",

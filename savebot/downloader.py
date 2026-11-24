@@ -42,7 +42,7 @@ NO_WATERMARK = "[format_note!*=?watermark][format_id!^=?download]"
 
 # Bu xato kodlarida boshqa usul bilan qayta urinish ma'nosiz.
 # "private" — sayt login so'rayapti: gallery-dl ham xuddi shunday rad etadi, faqat vaqt ketadi.
-FATAL_CODES = {"live", "too_long", "too_big", "timeout", "private", "blocked"}
+FATAL_CODES = {"live", "too_long", "too_big", "timeout", "private", "blocked", "network"}
 # gallery-dl (zaxira usul) uchun maksimal vaqt — foydalanuvchi uzoq kutib qolmasin
 GALLERY_TIMEOUT = 120
 
@@ -446,6 +446,12 @@ def classify_error(text: str) -> str:
         return "too_big"
     if any(s in msg for s in ("unsupported url", "no suitable extractor", "is not a valid url")):
         return "unsupported"
+    if any(s in msg for s in (
+        "failed to resolve", "name resolution", "name or service not known",
+        "nodename nor servname", "getaddrinfo failed", "network is unreachable",
+        "no route to host",
+    )):
+        return "network"  # server DNS/tarmog'i muammosi — boshqa usul ham ishlamaydi
     if "login" not in msg and any(s in msg for s in (
         "http error 403", "http error 429", "too many requests", "rate-limit", "rate limit",
     )):

@@ -211,7 +211,7 @@ def error_text(code: str, cfg: Config, lang: str) -> str:
         return t(lang, "ERR_TOO_BIG", max_mb=cfg.max_mb)
     if code == "too_long":
         return t(lang, "ERR_TOO_LONG", minutes=cfg.max_duration // 60)
-    key = {"private": "ERR_PRIVATE", "blocked": "ERR_BLOCKED",
+    key = {"private": "ERR_PRIVATE", "blocked": "ERR_BLOCKED", "network": "ERR_NETWORK",
            "unsupported": "ERR_UNSUPPORTED", "not_found": "ERR_NOT_FOUND",
            "live": "ERR_LIVE", "timeout": "ERR_TIMEOUT"}.get(code, "ERR_FAILED")
     return t(lang, key)
@@ -368,18 +368,32 @@ LOGIN_SITES = {"instagram", "youtube", "facebook", "tiktok", "twitter", "threads
 async def alert_admins_login(d: Deps, error: DownloadError, url: str) -> None:
     """Sayt login so'rasa — adminlarga soatiga bir marta xabar (odatda cookies kerakligini bildiradi)."""
     platform = platform_of(url)
-    if error.code not in ("private", "blocked") or platform not in LOGIN_SITES or not d.cfg.admin_ids:
+    if not d.cfg.admin_ids:
         return
-    now = time.monotonic()
-    if now - d.alerts.get(platform, -10**9) < 3600:
+    if error.code == "network":
+        await _alert_once(d, "network", (
+            "🌐 <b>Serverda DNS/tarmoq xatosi</b> — bot saytlarga ulana olmayapti.\n"
+            "docker-compose.yml da <code>dns:</code> sozlamasi borligini tekshiring va "
+            "<code>docker compose up -d</code> qiling.\n\n"
+            f"<code>{html.escape(error.detail[:300], quote=False)}</code>"))
         return
-    d.alerts[platform] = now
+    if error.code not in ("private", "blocked") or platform not in LOGIN_SITES:
+        return
     cookies = ("cookies fayli ulangan, lekin eskirgan yoki akkaunt bloklangan bo'lishi mumkin"
                if d.cfg.cookies else "cookies fayli ulanmagan")
     what = "login so'rayapti" if error.code == "private" else "server IP'sini cheklayapti (403/429)"
-    text = (f"⚠️ <b>{platform}</b> {what} ({cookies}).\n"
-            f"Foydalanuvchilar bu saytdan yuklay olmayapti. README → «Instagram va cookies».\n\n"
-            f"<code>{html.escape(error.detail[:300], quote=False)}</code>")
+    await _alert_once(d, platform, (
+        f"⚠️ <b>{platform}</b> {what} ({cookies}).\n"
+        f"Foydalanuvchilar bu saytdan yuklay olmayapti. README → «Instagram va cookies».\n\n"
+        f"<code>{html.escape(error.detail[:300], quote=False)}</code>"))
+
+
+async def _alert_once(d: Deps, key: str, text: str) -> None:
+    """Adminlarga bir xil ogohlantirish soatiga ko'pi bilan bir marta."""
+    now = time.monotonic()
+    if now - d.alerts.get(key, -10**9) < 3600:
+        return
+    d.alerts[key] = now
     for admin_id in d.cfg.admin_ids:
         with contextlib.suppress(TelegramAPIError):
             await d.bot.send_message(admin_id, text)

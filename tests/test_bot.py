@@ -534,3 +534,13 @@ async def test_mp3_falls_back_to_site_when_telegram_download_fails(env):
     await dp.feed_update(bot, callback(data))
     assert [k for _, k in fake.calls] == ["video", "audio"]
     assert session.of(SendAudio)
+
+
+async def test_network_error_fails_fast_and_alerts_admin(env):
+    dp, bot, session, fake = env
+    fake.probe_error = "network"
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/NET/"))
+    assert not fake.calls  # gallery-dl bilan 2 daqiqa kutilmaydi
+    assert any("tarmoq muammosi" in c.text for c in session.of(EditMessageText))
+    alerts = [c for c in session.of(SendMessage) if c.chat_id == ADMIN.id]
+    assert len(alerts) == 1 and "DNS" in alerts[0].text

@@ -84,6 +84,9 @@ def test_clean_title_removes_owner():
     ("ERROR: Sign in to confirm your age", "private"),
     ("ERROR: unable to download video data: HTTP Error 403: Forbidden", "blocked"),
     ("ERROR: HTTP Error 429: Too Many Requests", "blocked"),
+    ("[download] Got error: HTTPSConnection(host='instagram.ftas2-2.fna.fbcdn.net', port=443): "
+     "Failed to resolve 'instagram.ftas2-2.fna.fbcdn.net' ([Errno -3] Temporary failure in name "
+     "resolution)", "network"),
     ("ERROR: [youtube] x: Video unavailable", "not_found"),
     ("ERROR: something weird", "failed"),
 ])
