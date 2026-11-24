@@ -507,6 +507,7 @@ async def deliver(
             with contextlib.suppress(TelegramAPIError):
                 await d.bot.send_chat_action(
                     chat_id, ChatAction.UPLOAD_VOICE if kind == "audio" else ChatAction.UPLOAD_VIDEO)
+            started = time.monotonic()
             result = None
             if kind == "audio":
                 result = await audio_from_cached_video(d, url, workdir)
@@ -520,17 +521,22 @@ async def deliver(
             files = await prepare_files(result, d.cfg.max_bytes)
             if ticker:
                 ticker.cancel()
+            log.info("Tayyor [%s %s] %s: %d fayl, %.1f MB, %.1fs", kind, quality or "auto", url,
+                     len(files), sum(os.path.getsize(f.path) for f in files) / 1048576,
+                     time.monotonic() - started)
         if not files:
             raise DownloadError("too_big")
 
         await safe_edit(status, t(lang, "UPLOADING"))
         items = [Outgoing(f.kind, FSInputFile(f.path), f.width, f.height, f.duration) for f in files]
         single_video = len(items) == 1 and items[0].kind == "video"
+        upload_started = time.monotonic()
         sent = await send_media(
             d.bot, chat_id, items, make_caption(result.title, me.username), reply_to,
             markup_for_single if single_video else None,
             audio_title=result.title, performer=result.performer,
         )
+        log.info("Telegram'ga yuborildi: %.1fs", time.monotonic() - upload_started)
         if sent:
             await d.db.cache_set(ckey, sent, result.title)
         await safe_delete(status)

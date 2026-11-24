@@ -645,11 +645,24 @@ class Downloader:
             if time.monotonic() > ctx.deadline:
                 raise _Timeout()
             if d.get("status") == "downloading":
+                # video va audio alohida yuklanadi — ikkinchi qism boshlansa yana foiz ko'rinadi
+                ctx.progress.stage = "download"
                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
                 if total:
                     ctx.progress.percent = min(99, int(d.get("downloaded_bytes", 0) * 100 / total))
             elif d.get("status") == "finished":
                 ctx.progress.stage = "process"
+                ctx.progress.percent = None
+                log.info("Fayl yuklandi: %s (%.1f MB, %.1fs)", os.path.basename(d.get("filename") or ""),
+                         (d.get("total_bytes") or d.get("downloaded_bytes") or 0) / 1048576,
+                         d.get("elapsed") or 0)
+
+        def pp_hook(d: dict) -> None:
+            if time.monotonic() > ctx.deadline:
+                raise _Timeout()
+            if d.get("status") == "started":
+                ctx.progress.stage = "process"
+                log.info("Qayta ishlash: %s", d.get("postprocessor"))
 
         opts = {
             "outtmpl": os.path.join(ctx.workdir, "%(id).60s_%(autonumber)02d.%(ext)s"),
@@ -669,6 +682,7 @@ class Downloader:
             "concurrent_fragment_downloads": 4,
             "max_filesize": self.cfg.max_bytes,
             "progress_hooks": [hook],
+            "postprocessor_hooks": [pp_hook],
         }
         if ctx.cookies:
             opts["cookiefile"] = ctx.cookies
