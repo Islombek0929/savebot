@@ -44,3 +44,21 @@ async def test_stats(db: Database):
     assert s["users"] == 1 and s["dl_total"] == 2 and s["fail_today"] == 1
     assert s["cache_today"] == 1
     assert s["top_platforms"][0] == ("instagram", 2)
+
+
+async def test_old_database_is_migrated(tmp_path):
+    import aiosqlite
+    path = str(tmp_path / "old.db")
+    async with aiosqlite.connect(path) as conn:  # 1-versiyadagi jadval (lang ustunisiz)
+        await conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, first_name TEXT, username TEXT,"
+                           " joined_at INTEGER NOT NULL, last_seen INTEGER NOT NULL,"
+                           " is_banned INTEGER NOT NULL DEFAULT 0, is_blocked INTEGER NOT NULL DEFAULT 0,"
+                           " downloads INTEGER NOT NULL DEFAULT 0)")
+        await conn.execute("INSERT INTO users VALUES (5, 'A', NULL, 1, 1, 0, 0, 3)")
+        await conn.commit()
+    db = Database(path)
+    await db.connect()
+    assert await db.get_lang(5) is None
+    await db.set_lang(5, "ru")
+    assert await db.get_lang(5) == "ru"
+    await db.close()

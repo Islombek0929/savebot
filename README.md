@@ -14,6 +14,8 @@ audioni asl sifatda, suv belgisiz** yuklab beradi.
 | 🎵 **MP3** | Sifat tanlovida va har bir video ostida «🎵 MP3» tugmasi bor. MP3 muqova rasmi va nomi bilan keladi. |
 | ⚡ **Kesh** | Bir xil havola qayta yuborilsa, fayl qayta yuklanmaydi va bir zumda jo'natiladi (Telegram `file_id`). |
 | 📦 **Hajmga mos sifat** | Tanlov bo'lmagan holatda video 50 MB ga sig'masa, avtomatik 480p/360p tanlanadi. MP3 bitreyti uzunligiga qarab moslashadi. |
+| 🌐 **3 til** | O'zbekcha, Русский, English. Birinchi /start'da til so'raladi, keyin `/lang` yoki pastdagi «🌐 Til» tugmasi orqali o'zgartiriladi. Bot ta'rifi va buyruqlar menyusi ham Telegram ilovasi tiliga qarab ko'rinadi. |
+| 🎨 **Rangli tugmalar** | Video sifatlari — ko'k, MP3 va tasdiqlash — yashil (Telegram'ning yangi rangli tugmalari; eski ilovalarda oddiy ko'rinadi). |
 | 🕒 **Navbat** | Server bo'yicha bir vaqtda `MAX_PARALLEL` ta yuklash ketadi, qolganlar navbatda o'z o'rnini ko'radi. Bitta foydalanuvchi serverni band qilib qo'ya olmaydi. |
 | 📊 **Jarayon** | «⏳ Yuklanmoqda: 45%» ko'rinishida holat ko'rsatiladi. |
 | 👥 **Guruhlar** | Guruhga qo'shilsa, tanish platformalardagi havolalarni yuklab beradi (oddiy havolalarga javob bermaydi). |
@@ -161,7 +163,7 @@ savebot/
   db.py            SQLite (foydalanuvchilar, statistika, kesh)
   middlewares.py   ro'yxatga olish, ban, flood himoyasi
   handlers/        foydalanuvchi va admin buyruqlari
-  texts.py         bot matnlari
+  texts.py         bot matnlari (uz / ru / en)
 tests/             avtomatik testlar (internetsiz ishlaydi)
 ```
 

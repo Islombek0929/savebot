@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS users (
     last_seen   INTEGER NOT NULL,
     is_banned   INTEGER NOT NULL DEFAULT 0,
     is_blocked  INTEGER NOT NULL DEFAULT 0,
-    downloads   INTEGER NOT NULL DEFAULT 0
+    downloads   INTEGER NOT NULL DEFAULT 0,
+    lang        TEXT
 );
 CREATE TABLE IF NOT EXISTS downloads (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +67,11 @@ class Database:
         await self.conn.execute("PRAGMA journal_mode=WAL")
         await self.conn.execute("PRAGMA synchronous=NORMAL")
         await self.conn.executescript(SCHEMA)
+        # Eski bazalarni yangilash (migratsiya)
+        async with self.conn.execute("PRAGMA table_info(users)") as cur:
+            columns = {row[1] for row in await cur.fetchall()}
+        if "lang" not in columns:
+            await self.conn.execute("ALTER TABLE users ADD COLUMN lang TEXT")
         await self.conn.commit()
 
     async def close(self) -> None:
@@ -82,6 +88,20 @@ class Database:
                ON CONFLICT(id) DO UPDATE SET first_name=excluded.first_name,
                    username=excluded.username, last_seen=excluded.last_seen, is_blocked=0""",
             (user_id, first_name, username, now, now),
+        )
+        await self.conn.commit()
+
+    async def get_lang(self, user_id: int) -> str | None:
+        async with self.conn.execute("SELECT lang FROM users WHERE id=?", (user_id,)) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def set_lang(self, user_id: int, lang: str) -> None:
+        now = int(time.time())
+        await self.conn.execute(
+            """INSERT INTO users (id, joined_at, last_seen, lang) VALUES (?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET lang=excluded.lang""",
+            (user_id, now, now, lang),
         )
         await self.conn.commit()
 

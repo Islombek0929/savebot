@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from aiogram import Bot
-from aiogram.enums import ChatAction, ChatMemberStatus
+from aiogram.enums import ButtonStyle, ChatAction, ChatMemberStatus
 from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
@@ -31,7 +31,7 @@ from aiogram.types import (
     ReplyParameters,
 )
 
-from . import texts
+from .texts import progress_bar, t
 from .config import Config
 from .db import Database
 from .downloader import (
@@ -162,13 +162,16 @@ class SubscriptionChecker:
         return missing
 
     @staticmethod
-    def keyboard(missing: list[Channel]) -> InlineKeyboardMarkup:
+    def keyboard(missing: list[Channel], lang: str) -> InlineKeyboardMarkup:
+        many = len(missing) > 1
         rows = [
-            [InlineKeyboardButton(text=f"📢 Kanal {i}", url=ch.link)]
+            [InlineKeyboardButton(text=t(lang, "BTN_CHANNEL") + (f" {i}" if many else ""),
+                                  url=ch.link, style=ButtonStyle.PRIMARY)]
             for i, ch in enumerate(missing, 1)
             if ch.link
         ]
-        rows.append([InlineKeyboardButton(text=texts.BTN_CHECK_SUB, callback_data="check_sub")])
+        rows.append([InlineKeyboardButton(text=t(lang, "BTN_CHECK_SUB"), callback_data="check_sub",
+                                          style=ButtonStyle.SUCCESS)])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -197,22 +200,19 @@ def make_caption(title: str, bot_username: str | None, show_title: bool = True) 
     return "\n\n".join(x for x in (title, tail) if x)
 
 
-def error_text(code: str, cfg: Config) -> str:
-    return {
-        "private": texts.ERR_PRIVATE,
-        "unsupported": texts.ERR_UNSUPPORTED,
-        "not_found": texts.ERR_NOT_FOUND,
-        "too_big": texts.ERR_TOO_BIG.format(max_mb=cfg.max_mb),
-        "too_long": texts.ERR_TOO_LONG.format(minutes=cfg.max_duration // 60),
-        "live": texts.ERR_LIVE,
-        "timeout": texts.ERR_TIMEOUT,
-    }.get(code, texts.ERR_FAILED)
+def error_text(code: str, cfg: Config, lang: str) -> str:
+    if code == "too_big":
+        return t(lang, "ERR_TOO_BIG", max_mb=cfg.max_mb)
+    if code == "too_long":
+        return t(lang, "ERR_TOO_LONG", minutes=cfg.max_duration // 60)
+    key = {"private": "ERR_PRIVATE", "unsupported": "ERR_UNSUPPORTED", "not_found": "ERR_NOT_FOUND",
+           "live": "ERR_LIVE", "timeout": "ERR_TIMEOUT"}.get(code, "ERR_FAILED")
+    return t(lang, key)
 
 
-def mp3_keyboard(key: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_AUDIO, callback_data=f"mp3:{key}")]]
-    )
+def mp3_keyboard(key: str, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=t(lang, "BTN_AUDIO"), callback_data=f"mp3:{key}", style=ButtonStyle.SUCCESS)]])
 
 
 async def safe_edit(msg: Message | None, text: str, **kw) -> None:
@@ -354,14 +354,14 @@ class Deps:
     queue: DownloadQueue
 
 
-async def _progress_ticker(status: Message, progress: Progress) -> None:
+async def _progress_ticker(status: Message, progress: Progress, lang: str) -> None:
     last = None
     while True:
         await asyncio.sleep(3)
         if progress.stage == "process":
-            text = texts.PROCESSING
+            text = t(lang, "PROCESSING")
         elif progress.percent is not None:
-            text = texts.PROGRESS.format(percent=progress.percent)
+            text = t(lang, "PROGRESS", bar=progress_bar(progress.percent), percent=progress.percent)
         else:
             continue
         if text != last:
@@ -381,6 +381,7 @@ async def deliver(
     quality: int | None = None,
     info: dict | None = None,
     ytdlp_error: DownloadError | None = None,
+    lang: str = "uz",
 ) -> bool:
     """Havolani yuklab, foydalanuvchiga yuboradi. Muvaffaqiyatli bo'lsa True.
 
@@ -397,12 +398,12 @@ async def deliver(
                 await d.bot.send_message(chat_id, text, reply_parameters=reply)
 
     if not await is_public_url(url):
-        await fail(texts.ERR_UNSUPPORTED)
+        await fail(t(lang, "ERR_UNSUPPORTED"))
         return False
 
     key = link_key(url)
     await d.db.link_put(key, url)
-    markup_for_single = mp3_keyboard(key) if kind == "video" else None
+    markup_for_single = mp3_keyboard(key, lang) if kind == "video" else None
 
     # 1) Kesh: shu havola avval yuklangan bo'lsa — darhol yuboramiz
     ckey = cache_key(f"video{quality}" if kind == "video" and quality else kind, url)
@@ -422,7 +423,7 @@ async def deliver(
 
     # 2) Navbat
     if not d.queue.try_reserve(user_id):
-        await fail(texts.TOO_MANY.format(limit=d.queue.per_user))
+        await fail(t(lang, "TOO_MANY"))
         return False
 
     workdir = tempfile.mkdtemp(prefix="dl_", dir=d.cfg.tmp_dir)
@@ -430,18 +431,18 @@ async def deliver(
     ok = False
     try:
         if status:
-            await safe_edit(status, texts.STARTING)
+            await safe_edit(status, t(lang, "STARTING"))
         else:
             reply = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
-            status = await d.bot.send_message(chat_id, texts.STARTING, reply_parameters=reply)
+            status = await d.bot.send_message(chat_id, t(lang, "STARTING"), reply_parameters=reply)
 
         progress = Progress()
-        async with d.queue.slot(on_wait=lambda pos: safe_edit(status, texts.QUEUED.format(pos=pos))):
-            await safe_edit(status, texts.STARTING)
+        async with d.queue.slot(on_wait=lambda pos: safe_edit(status, t(lang, "QUEUED", pos=pos))):
+            await safe_edit(status, t(lang, "STARTING"))
             with contextlib.suppress(TelegramAPIError):
                 await d.bot.send_chat_action(
                     chat_id, ChatAction.UPLOAD_VOICE if kind == "audio" else ChatAction.UPLOAD_VIDEO)
-            ticker = asyncio.create_task(_progress_ticker(status, progress))
+            ticker = asyncio.create_task(_progress_ticker(status, progress, lang))
             result = await asyncio.wait_for(
                 d.downloader.download(url, kind, workdir, progress, quality=quality,
                                       info=info, ytdlp_error=ytdlp_error),
@@ -452,7 +453,7 @@ async def deliver(
         if not files:
             raise DownloadError("too_big")
 
-        await safe_edit(status, texts.UPLOADING)
+        await safe_edit(status, t(lang, "UPLOADING"))
         items = [Outgoing(f.kind, FSInputFile(f.path), f.width, f.height, f.duration) for f in files]
         single_video = len(items) == 1 and items[0].kind == "video"
         sent = await send_media(
@@ -466,15 +467,15 @@ async def deliver(
         ok = True
     except DownloadError as e:
         log.info("Yuklanmadi [%s] %s: %s", e.code, url, e.detail[:200])
-        await fail(error_text(e.code, d.cfg))
+        await fail(error_text(e.code, d.cfg, lang))
     except asyncio.TimeoutError:
         log.warning("Vaqt tugadi: %s", url)
-        await fail(texts.ERR_TIMEOUT)
+        await fail(t(lang, "ERR_TIMEOUT"))
     except TelegramEntityTooLarge:
-        await fail(error_text("too_big", d.cfg))
+        await fail(error_text("too_big", d.cfg, lang))
     except Exception:
         log.exception("Kutilmagan xato: %s", url)
-        await fail(texts.ERR_UNEXPECTED)
+        await fail(t(lang, "ERR_UNEXPECTED"))
     finally:
         if ticker:
             ticker.cancel()
@@ -529,17 +530,19 @@ def _duration(sec: float | None) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
-def quality_picker(probe: Probe, key: str, cfg: Config) -> tuple[str, InlineKeyboardMarkup]:
+def quality_picker(probe: Probe, key: str, cfg: Config, lang: str = "uz") -> tuple[str, InlineKeyboardMarkup]:
     """Sifat tanlash xabari: sig'adiganlari tugma, sig'maydiganlari izohda."""
     fits = [o for o in probe.options if not o.size or o.size <= cfg.max_bytes]
     too_big = [o for o in probe.options if o.size and o.size > cfg.max_bytes]
 
+    # Video sifatlari — ko'k, MP3 — yashil (Telegram rangli tugmalari)
     buttons = [InlineKeyboardButton(text=f"📹 {quality_name(o.label)}{_mb(o.size)}",
-                                    callback_data=f"q:{o.label}:{key}") for o in fits]
+                                    callback_data=f"q:{o.label}:{key}", style=ButtonStyle.PRIMARY)
+               for o in fits]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     mp3_size = int(probe.duration * 192_000 / 8) if probe.duration else None
-    rows.append([InlineKeyboardButton(text=f"{texts.BTN_AUDIO}{_mb(mp3_size)}",
-                                      callback_data=f"fmt:a:{key}")])
+    rows.append([InlineKeyboardButton(text=f"{t(lang, 'BTN_AUDIO')}{_mb(mp3_size)}",
+                                      callback_data=f"fmt:a:{key}", style=ButtonStyle.SUCCESS)])
 
     lines = []
     if probe.title:
@@ -547,17 +550,17 @@ def quality_picker(probe: Probe, key: str, cfg: Config) -> tuple[str, InlineKeyb
     if probe.duration:
         lines.append(f"⏱ {_duration(probe.duration)}")
     lines.append("")
-    lines.append(texts.CHOOSE_QUALITY)
+    lines.append(t(lang, "CHOOSE_QUALITY"))
     if too_big:
         names = ", ".join(quality_name(o.label) for o in too_big)
-        lines.append(texts.QUALITY_TOO_BIG.format(names=names, max_mb=cfg.max_mb))
+        lines.append(t(lang, "QUALITY_TOO_BIG", names=names, max_mb=cfg.max_mb))
     return "\n".join(lines).strip(), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def handle_link(d: Deps, probes: ProbeCache, *, chat_id: int, user_id: int, url: str,
-                      reply_to: int | None) -> None:
+                      reply_to: int | None, lang: str = "uz") -> None:
     """Yangi havola: kerak bo'lsa sifat tanlovini ko'rsatadi, aks holda darhol yuklaydi."""
-    common = dict(chat_id=chat_id, user_id=user_id, url=url, reply_to=reply_to)
+    common = dict(chat_id=chat_id, user_id=user_id, url=url, reply_to=reply_to, lang=lang)
     if is_audio_site(url):
         await deliver(d, kind="audio", **common)
         return
@@ -578,23 +581,23 @@ async def handle_link(d: Deps, probes: ProbeCache, *, chat_id: int, user_id: int
     status = None
     if probe is None:
         reply = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
-        status = await d.bot.send_message(chat_id, texts.CHECKING, reply_parameters=reply)
+        status = await d.bot.send_message(chat_id, t(lang, "CHECKING"), reply_parameters=reply)
         try:
             async with d.queue.probe_slots:
                 probe = await asyncio.wait_for(d.downloader.probe(url), timeout=120)
         except DownloadError as e:
             if e.code in FATAL_CODES:
-                await safe_edit(status, error_text(e.code, d.cfg))
+                await safe_edit(status, error_text(e.code, d.cfg, lang))
                 return
             # yt-dlp tanimadi — rasm bo'lishi mumkin, gallery-dl bilan urinamiz
             await deliver(d, kind="video", status=status, ytdlp_error=e, **common)
             return
         except asyncio.TimeoutError:
-            await safe_edit(status, texts.ERR_TIMEOUT)
+            await safe_edit(status, t(lang, "ERR_TIMEOUT"))
             return
         except Exception:
             log.exception("Probe xatosi: %s", url)
-            await safe_edit(status, texts.ERR_UNEXPECTED)
+            await safe_edit(status, t(lang, "ERR_UNEXPECTED"))
             return
 
     if len(probe.options) < 2:
@@ -603,7 +606,7 @@ async def handle_link(d: Deps, probes: ProbeCache, *, chat_id: int, user_id: int
         return
 
     probes.put(url, probe)
-    text, markup = quality_picker(probe, key, d.cfg)
+    text, markup = quality_picker(probe, key, d.cfg, lang)
     if status:
         await safe_edit(status, text, reply_markup=markup)
     else:

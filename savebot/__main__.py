@@ -21,6 +21,7 @@ from .db import Database
 from .downloader import Downloader, versions
 from .handlers import admin, user
 from .middlewares import UserMiddleware
+from .texts import DEFAULT_LANG, LANGS, t
 from .services import (
     AppState,
     Deps,
@@ -55,6 +56,24 @@ async def build(cfg: Config, bot: Bot, db: Database) -> Dispatcher:
     return dp
 
 
+async def _setup_profile(bot: Bot) -> None:
+    """Buyruqlar menyusi va bot ta'rifi — 3 tilda (Telegram ilovasi tiliga qarab ko'rinadi)."""
+    for code in LANGS:
+        language_code = None if code == DEFAULT_LANG else code  # standart — o'zbekcha
+        try:
+            await bot.set_my_commands(
+                [BotCommand(command="start", description=t(code, "CMD_START")),
+                 BotCommand(command="help", description=t(code, "CMD_HELP")),
+                 BotCommand(command="lang", description=t(code, "CMD_LANG"))],
+                scope=BotCommandScopeAllPrivateChats(),
+                language_code=language_code,
+            )
+            await bot.set_my_description(t(code, "BOT_DESCRIPTION"), language_code=language_code)
+            await bot.set_my_short_description(t(code, "BOT_SHORT"), language_code=language_code)
+        except Exception as e:  # noqa: BLE001 — profilni sozlay olmasak ham bot ishlayveradi
+            log.warning("Bot profilini sozlab bo'lmadi (%s): %s", code, e)
+
+
 async def _housekeeping(db: Database, cfg: Config) -> None:
     while True:
         with contextlib.suppress(Exception):
@@ -83,12 +102,7 @@ async def main() -> bool:
         await db.connect()
         dp = await build(cfg, bot, db)
         me = await bot.me()
-        with contextlib.suppress(Exception):
-            await bot.set_my_commands(
-                [BotCommand(command="start", description="Botni ishga tushirish"),
-                 BotCommand(command="help", description="Yordam")],
-                scope=BotCommandScopeAllPrivateChats(),
-            )
+        await _setup_profile(bot)
         housekeeping = asyncio.create_task(_housekeeping(db, cfg))
         v = versions()
         log.info("@%s ishga tushdi | limit %s MB | parallel %s | yt-dlp %s | gallery-dl %s",

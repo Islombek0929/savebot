@@ -9,6 +9,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from .db import Database
+from .texts import guess_lang
 
 
 class UserMiddleware(BaseMiddleware):
@@ -24,6 +25,19 @@ class UserMiddleware(BaseMiddleware):
         self.per_seconds = per_seconds
         self._touched: dict[int, float] = {}
         self._hits: dict[int, list[float]] = {}
+        # user_id -> tanlangan til (None — hali tanlamagan)
+        self._langs: dict[int, str | None] = {}
+
+    def remember_lang(self, user_id: int, lang: str) -> None:
+        self._langs[user_id] = lang
+
+    async def _lang(self, user) -> tuple[str, bool]:
+        if user.id not in self._langs:
+            if len(self._langs) > 100_000:
+                self._langs.clear()
+            self._langs[user.id] = await self.db.get_lang(user.id)
+        chosen = self._langs[user.id]
+        return (chosen or guess_lang(user.language_code)), chosen is not None
 
     def _flooding(self, user_id: int) -> bool:
         now = time.monotonic()
@@ -58,4 +72,5 @@ class UserMiddleware(BaseMiddleware):
 
         if user.id not in self.admin_ids and isinstance(event, Message) and self._flooding(user.id):
             return None
+        data["lang"], data["lang_chosen"] = await self._lang(user)
         return await handler(event, data)

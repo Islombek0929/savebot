@@ -23,6 +23,8 @@ from aiogram.types import (
     CallbackQuery,
     Chat,
     ChatMemberLeft,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
     ChatMemberMember,
     Message,
     PhotoSize,
@@ -38,7 +40,7 @@ MB = 1024 * 1024
 
 NOW = datetime.datetime.now()
 BOT_USER = User(id=42, is_bot=True, first_name="Save", username="save_test_bot")
-USER = User(id=500, is_bot=False, first_name="Ali")
+USER = User(id=500, is_bot=False, first_name="Ali", language_code="uz")
 ADMIN = User(id=1, is_bot=False, first_name="Admin")
 
 
@@ -81,8 +83,8 @@ class MockSession(BaseSession):
                     out.append(self._msg(method.chat_id, video=Video(file_id=f"VID{self._mid}", file_unique_id="u", width=1, height=1, duration=1)))
             return out
         if isinstance(method, (SendMessage, EditMessageText)):
-            return self._msg(getattr(method, "chat_id", 0) or 0, text=method.text,
-                             reply_markup=method.reply_markup)
+            markup = method.reply_markup if isinstance(method.reply_markup, InlineKeyboardMarkup) else None
+            return self._msg(getattr(method, "chat_id", 0) or 0, text=method.text, reply_markup=markup)
         if isinstance(method, GetChatMember):
             if self.member_status == ChatMemberStatus.LEFT:
                 return ChatMemberLeft(user=USER)
@@ -172,11 +174,54 @@ def callback(data, user=USER, msg_text="x", reply_to_mid=None):
         id="cb1", from_user=user, chat_instance="ci", data=data, message=msg))
 
 
-async def test_start(env):
+async def test_start_asks_language_first(env, db):
     dp, bot, session, _ = env
     await dp.feed_update(bot, message("/start"))
-    text = session.of(SendMessage)[0].text
-    assert "Salom" in text and "Ali" in text
+    picker = session.of(SendMessage)[0]
+    buttons = [row[0] for row in picker.reply_markup.inline_keyboard]
+    assert [b.text for b in buttons] == ["🇺🇿 O'zbekcha", "🇷🇺 Русский", "🇬🇧 English"]
+    assert all(b.style == "primary" for b in buttons)
+
+    await dp.feed_update(bot, callback("lang:ru"))
+    assert await db.get_lang(USER.id) == "ru"
+    hello = session.of(SendMessage)[-1]
+    assert hello.text.startswith("👋 Привет, <b>Ali</b>!")
+    menu = hello.reply_markup
+    assert isinstance(menu, ReplyKeyboardMarkup)
+    assert [b.text for b in menu.keyboard[0]] == ["🌐 Язык", "❓ Помощь"]
+
+    # Ikkinchi /start — til qayta so'ralmaydi
+    await dp.feed_update(bot, message("/start", mid=2))
+    assert session.of(SendMessage)[-1].text.startswith("👋 Привет")
+
+
+async def test_language_is_used_everywhere(env, db):
+    dp, bot, session, fake = env
+    await db.touch_user(USER.id, "Ali", None)
+    await db.set_lang(USER.id, "en")
+    fake.error = "private"
+    await dp.feed_update(bot, message("https://www.instagram.com/stories/u/1/"))
+    assert any("private or requires login" in c.text for c in session.of(EditMessageText))
+    await dp.feed_update(bot, message("❓ Help", mid=2))  # menyu tugmasi
+    assert session.of(SendMessage)[-1].text.startswith("<b>How to use</b>")
+    await dp.feed_update(bot, message("🌐 Language", mid=3))
+    kb = session.of(SendMessage)[-1].reply_markup.inline_keyboard
+    assert kb[2][0].text == "🇬🇧 English  ✓" and kb[2][0].style == "success"
+
+
+async def test_language_guessed_from_telegram_before_choice(env):
+    dp, bot, session, _ = env
+    ru_user = User(id=777, is_bot=False, first_name="Иван", language_code="ru")
+    await dp.feed_update(bot, message("привет", user=ru_user))
+    assert "Отправьте ссылку" in session.of(SendMessage)[-1].text
+
+
+async def test_greeting_without_strange_name(env, db):
+    dp, bot, session, _ = env
+    dot = User(id=901, is_bot=False, first_name=".", language_code="uz")
+    await db.set_lang(901, "uz")
+    await dp.feed_update(bot, message("/start", user=dot))
+    assert session.of(SendMessage)[-1].text.startswith("👋 Salom!\n")
 
 
 async def test_instagram_link_sends_clean_video_with_mp3_button(env, db):
@@ -231,6 +276,7 @@ async def test_quality_picker_shown_and_used(env):
     assert texts_ == ["📹 360p · 12 MB", "📹 480p · 25 MB", "📹 720p · 45 MB", "🎵 MP3 · 5.6 MB"]
     assert "Zo'r &lt;klip&gt;" in picker.text and "4:05" in picker.text
     assert "1080p, 2K — 50 MB dan katta" in picker.text
+    assert {b.style for b in rows[0]} == {"primary"} and rows[-1][0].style == "success"
     await dp.feed_update(bot, callback(rows[1][0].callback_data))  # 720p
     assert fake.calls == [("https://youtu.be/dQw4w9WgXcQ", "video")]
     assert fake.kwargs[0]["quality"] == 720

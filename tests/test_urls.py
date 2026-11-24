@@ -104,3 +104,12 @@ async def test_is_public_url_blocks_internal(url):
 
 async def test_is_public_url_allows_public_ip():
     assert await is_public_url("https://8.8.8.8/video.mp4")
+
+
+def test_texts_complete_and_guess():
+    from savebot.texts import _T, LANGS, guess_lang, progress_bar
+    for key, variants in _T.items():
+        assert set(variants) == set(LANGS), key  # har bir matn 3 tilda bor
+    assert guess_lang("ru") == "ru" and guess_lang("kk") == "ru" and guess_lang("uz") == "uz"
+    assert guess_lang("en-US") == "en" and guess_lang(None) == "uz"
+    assert progress_bar(50) == "▰▰▰▰▰▱▱▱▱▱"
