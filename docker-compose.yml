@@ -6,6 +6,8 @@ services:
     env_file: .env
     volumes:
       - bot-data:/app/data          # baza (foydalanuvchilar, statistika, kesh)
+      # Local Bot API fayllari (faqat o'qish) — MP3'ni yuborilgan videodan tez olish uchun
+      - tg-bot-api:/var/lib/telegram-bot-api:ro
       # - ./cookies.txt:/app/cookies.txt:ro   # Instagram/YouTube cookies (COOKIES_FILE=/app/cookies.txt)
     logging:
       driver: json-file

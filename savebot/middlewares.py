@@ -74,4 +74,5 @@ class UserMiddleware(BaseMiddleware):
         if user.id not in self.admin_ids and isinstance(event, Message) and self._flooding(user.id):
             return None
         data["lang"], data["lang_chosen"] = await self._lang(user)
+        data["is_admin"] = user.id in self.admin_ids
         return await handler(event, data)

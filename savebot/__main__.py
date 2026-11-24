@@ -14,7 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
+from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeChat
 
 from .config import Config, load_config
 from .db import Database
@@ -54,6 +54,22 @@ async def build(cfg: Config, bot: Bot, db: Database) -> Dispatcher:
     dp.callback_query.outer_middleware(user_mw)
     dp.include_routers(admin.get_router(), user.get_router())
     return dp
+
+
+async def _setup_admin_commands(bot: Bot, cfg: Config) -> None:
+    """Adminlarning «Menu» ro'yxatida admin buyruqlari ham ko'rinadi."""
+    commands = [
+        BotCommand(command="start", description="Boshlash"),
+        BotCommand(command="admin", description="🛠 Admin panel"),
+        BotCommand(command="stats", description="📊 Statistika"),
+        BotCommand(command="lang", description="Tilni o'zgartirish"),
+        BotCommand(command="help", description="Yordam"),
+    ]
+    for admin_id in cfg.admin_ids:
+        try:
+            await bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=admin_id))
+        except Exception as e:  # noqa: BLE001
+            log.warning("Admin %s uchun menyu o'rnatilmadi (botga /start yozganmi?): %s", admin_id, e)
 
 
 async def _setup_profile(bot: Bot) -> None:
@@ -103,6 +119,11 @@ async def main() -> bool:
         dp = await build(cfg, bot, db)
         me = await bot.me()
         await _setup_profile(bot)
+        await _setup_admin_commands(bot, cfg)
+        if cfg.admin_ids:
+            log.info("Adminlar: %s", ", ".join(map(str, sorted(cfg.admin_ids))))
+        else:
+            log.warning("ADMIN_IDS bo'sh — admin panel hech kimda ko'rinmaydi (.env ni tekshiring)")
         housekeeping = asyncio.create_task(_housekeeping(db, cfg))
         v = versions()
         log.info("@%s ishga tushdi | limit %s MB | parallel %s | yt-dlp %s | gallery-dl %s",

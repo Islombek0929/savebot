@@ -1,4 +1,4 @@
-"""Admin buyruqlari: /admin, /stats, /broadcast, /ban, /unban, /update."""
+"""Admin panel (tugmalar bilan) va buyruqlar: /admin, /stats, /broadcast, /ban, /unban, /update."""
 from __future__ import annotations
 
 import asyncio
@@ -6,6 +6,7 @@ import logging
 import sys
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.enums import ButtonStyle
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -15,6 +16,7 @@ from ..db import Database
 from ..downloader import versions
 from ..middlewares import UserMiddleware
 from ..services import AppState, DownloadQueue
+from .user import ADMIN_BUTTON
 
 log = logging.getLogger(__name__)
 
@@ -24,25 +26,40 @@ class IsAdmin(Filter):
         return bool(event.from_user and event.from_user.id in config.admin_ids)
 
 
-ADMIN_HELP = (
-    "🛠 <b>Admin panel</b>\n\n"
-    "/stats — statistika\n"
-    "/broadcast — xabarga <i>reply</i> qilib yozing: hammaga yuboriladi\n"
-    "/ban <code>ID</code> — foydalanuvchini bloklash\n"
-    "/unban <code>ID</code> — blokdan chiqarish\n"
-    "/update — yt-dlp va gallery-dl ni yangilash (bot qayta ishga tushadi)"
+ADMIN_TITLE = "🛠 <b>Admin panel</b>\n\nKerakli bo'limni tanlang 👇"
+BAN_HELP = (
+    "🚫 <b>Ban / Unban</b>\n\n"
+    "<code>/ban 123456789</code> — foydalanuvchini bloklash\n"
+    "<code>/unban 123456789</code> — blokdan chiqarish\n\n"
+    "<i>Foydalanuvchi ID sini @userinfobot orqali bilish mumkin.</i>"
 )
 
 
+def _btn(text: str, data: str, style: ButtonStyle | None = None) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=data, style=style)
+
+
+def admin_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [_btn("📊 Statistika", "adm:stats", ButtonStyle.PRIMARY)],
+        [_btn("📢 Xabar yuborish", "adm:bc", ButtonStyle.SUCCESS)],
+        [_btn("🔄 yt-dlp yangilash", "adm:upd"), _btn("🚫 Ban / Unban", "adm:ban")],
+    ])
+
+
+def back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[_btn("⬅️ Orqaga", "adm:menu")]])
+
+
 async def cmd_admin(message: Message) -> None:
-    await message.answer(ADMIN_HELP)
+    await message.answer(ADMIN_TITLE, reply_markup=admin_keyboard())
 
 
-async def cmd_stats(message: Message, db: Database, queue: DownloadQueue) -> None:
+async def stats_text(db: Database, queue: DownloadQueue) -> str:
     s = await db.stats()
     top = "\n".join(f"  • {name}: {count}" for name, count in s["top_platforms"]) or "  —"
     v = versions()
-    await message.answer(
+    return (
         "📊 <b>Statistika</b>\n\n"
         f"👥 Foydalanuvchilar: <b>{s['users']}</b> (bugun +{s['users_today']})\n"
         f"🟢 Faol: bugun {s['active_today']}, 7 kunda {s['active_week']}\n"
@@ -53,6 +70,73 @@ async def cmd_stats(message: Message, db: Database, queue: DownloadQueue) -> Non
         f"🏆 7 kunlik top platformalar:\n{top}\n\n"
         f"🔧 yt-dlp {v['yt-dlp']}, gallery-dl {v['gallery-dl']}"
     )
+
+
+async def cmd_stats(message: Message, db: Database, queue: DownloadQueue) -> None:
+    await message.answer(await stats_text(db, queue))
+
+
+async def on_admin_button(cb: CallbackQuery, db: Database, queue: DownloadQueue,
+                          app_state: AppState, dispatcher: Dispatcher) -> None:
+    action = cb.data.split(":", 1)[1]
+    await cb.answer()
+    msg = cb.message
+    if action == "menu":
+        app_state.awaiting_broadcast.discard(cb.from_user.id)
+        await msg.edit_text(ADMIN_TITLE, reply_markup=admin_keyboard())
+    elif action == "stats":
+        refresh = InlineKeyboardMarkup(inline_keyboard=[
+            [_btn("🔄 Yangilash", "adm:stats", ButtonStyle.PRIMARY), _btn("⬅️ Orqaga", "adm:menu")]])
+        try:
+            await msg.edit_text(await stats_text(db, queue), reply_markup=refresh)
+        except TelegramAPIError:  # "message is not modified"
+            pass
+    elif action == "bc":
+        if app_state.broadcasting:
+            await msg.edit_text("⏳ Oldingi tarqatish hali tugamadi.", reply_markup=back_keyboard())
+            return
+        app_state.awaiting_broadcast.add(cb.from_user.id)
+        count = len(await db.broadcast_ids())
+        await msg.edit_text(
+            f"📢 <b>Xabar yuborish</b> ({count} ta foydalanuvchi)\n\n"
+            "Hammaga yubormoqchi bo'lgan xabarni shu yerga yuboring — matn, rasm, video, "
+            "tugmali post, nima bo'lsa ham. Keyin tasdiqlaysiz.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                _btn("❌ Bekor qilish", "adm:menu", ButtonStyle.DANGER)]]),
+        )
+    elif action == "ban":
+        await msg.edit_text(BAN_HELP, reply_markup=back_keyboard())
+    elif action == "upd":
+        await msg.edit_text(
+            "🔄 yt-dlp va gallery-dl eng yangi versiyaga yangilanadi va bot qayta ishga tushadi "
+            "(faol yuklashlar tugashi kutiladi).\n\nDavom etilsinmi?",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                _btn("✅ Ha, yangilash", "adm:upd_yes", ButtonStyle.SUCCESS),
+                _btn("⬅️ Orqaga", "adm:menu")]]),
+        )
+    elif action == "upd_yes":
+        await msg.edit_reply_markup(reply_markup=None)
+        await _do_update(msg, app_state, queue, dispatcher)
+
+
+class AwaitingBroadcast(Filter):
+    async def __call__(self, message: Message, app_state: AppState) -> bool:
+        return bool(message.from_user and message.from_user.id in app_state.awaiting_broadcast)
+
+
+async def on_broadcast_source(message: Message, db: Database, app_state: AppState) -> None:
+    """Admin «Xabar yuborish» ni bosgandan keyin yuborgan xabar — tasdiq so'raymiz."""
+    app_state.awaiting_broadcast.discard(message.from_user.id)
+    await _ask_broadcast_confirm(message, message.message_id, db)
+
+
+async def _ask_broadcast_confirm(message: Message, source_id: int, db: Database) -> None:
+    count = len(await db.broadcast_ids())
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        _btn(f"✅ Ha, {count} kishiga", f"bc:yes:{source_id}", ButtonStyle.SUCCESS),
+        _btn("❌ Bekor", "bc:no", ButtonStyle.DANGER),
+    ]])
+    await message.answer(f"Yuqoridagi xabar {count} ta foydalanuvchiga yuborilsinmi?", reply_markup=kb)
 
 
 async def cmd_ban(message: Message, command: CommandObject, db: Database,
@@ -80,12 +164,7 @@ async def cmd_broadcast(message: Message, db: Database, app_state: AppState) -> 
     if app_state.broadcasting:
         await message.answer("⏳ Oldingi tarqatish hali tugamadi.")
         return
-    count = len(await db.broadcast_ids())
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=f"✅ Ha, {count} kishiga", callback_data=f"bc:yes:{src.message_id}"),
-        InlineKeyboardButton(text="❌ Bekor", callback_data="bc:no"),
-    ]])
-    await message.answer(f"Xabar {count} ta foydalanuvchiga yuborilsinmi?", reply_markup=kb)
+    await _ask_broadcast_confirm(message, src.message_id, db)
 
 
 async def on_broadcast(cb: CallbackQuery, bot: Bot, db: Database, app_state: AppState) -> None:
@@ -143,6 +222,11 @@ async def _broadcast(bot: Bot, db: Database, app_state: AppState, from_chat: int
 # ---------------- update ----------------
 async def cmd_update(message: Message, app_state: AppState, queue: DownloadQueue,
                      dispatcher: Dispatcher) -> None:
+    await _do_update(message, app_state, queue, dispatcher)
+
+
+async def _do_update(message: Message, app_state: AppState, queue: DownloadQueue,
+                     dispatcher: Dispatcher) -> None:
     before = versions()
     msg = await message.answer("🔄 Yangilanmoqda...")
     proc = await asyncio.create_subprocess_exec(
@@ -171,6 +255,11 @@ def get_router() -> Router:
     router.message.filter(IsAdmin())
     router.callback_query.filter(IsAdmin())
     router.message.register(cmd_admin, Command("admin"))
+    router.message.register(cmd_admin, F.chat.type == "private", F.text == ADMIN_BUTTON)
+    router.callback_query.register(on_admin_button, F.data.startswith("adm:"))
+    # «Xabar yuborish» bosilgandan keyingi xabar (buyruqlardan tashqari)
+    router.message.register(on_broadcast_source, F.chat.type == "private", AwaitingBroadcast(),
+                            ~F.text.startswith("/"))
     router.message.register(cmd_stats, Command("stats"))
     router.message.register(cmd_ban, Command("ban", "unban"))
     router.message.register(cmd_broadcast, Command("broadcast"))

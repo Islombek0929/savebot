@@ -44,11 +44,17 @@ class HasLink(Filter):
 
 
 # ---------------- klaviaturalar ----------------
-def menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
-    """Pastdagi doimiy menyu."""
+ADMIN_BUTTON = "🛠 Admin panel"
+
+
+def menu_keyboard(lang: str, is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """Pastdagi doimiy menyu (adminlarda qo'shimcha «Admin panel» tugmasi)."""
+    rows = [[KeyboardButton(text=t(lang, "MENU_LANG"), style=ButtonStyle.PRIMARY),
+             KeyboardButton(text=t(lang, "MENU_HELP"), style=ButtonStyle.SUCCESS)]]
+    if is_admin:
+        rows.append([KeyboardButton(text=ADMIN_BUTTON, style=ButtonStyle.DANGER)])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=t(lang, "MENU_LANG"), style=ButtonStyle.PRIMARY),
-                   KeyboardButton(text=t(lang, "MENU_HELP"), style=ButtonStyle.SUCCESS)]],
+        keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="https://...",
@@ -78,9 +84,9 @@ def _greeting_name(first_name: str | None) -> str:
     return f", <b>{html.escape(name[:40], quote=False)}</b>"
 
 
-async def _send_start(message: Message, lang: str) -> None:
+async def _send_start(message: Message, lang: str, is_admin: bool = False) -> None:
     await message.answer(t(lang, "START", name=_greeting_name(message.from_user.first_name)),
-                         reply_markup=menu_keyboard(lang))
+                         reply_markup=menu_keyboard(lang, is_admin))
 
 
 async def _subscribed(bot: Bot, subs: SubscriptionChecker, chat_type: str, user_id: int,
@@ -96,20 +102,20 @@ async def _subscribed(bot: Bot, subs: SubscriptionChecker, chat_type: str, user_
 
 # ---------------- buyruqlar ----------------
 async def cmd_start(message: Message, bot: Bot, subs: SubscriptionChecker, lang: str,
-                    lang_chosen: bool) -> None:
+                    lang_chosen: bool, is_admin: bool = False) -> None:
     if not lang_chosen:
         # Birinchi marta — avval til so'raymiz
         await message.answer(CHOOSE_LANG_ALL, reply_markup=lang_keyboard())
         return
-    await _send_start(message, lang)
+    await _send_start(message, lang, is_admin)
     await _subscribed(bot, subs, message.chat.type, message.from_user.id, message.answer, lang)
 
 
-async def cmd_help(message: Message, config: Config, lang: str) -> None:
+async def cmd_help(message: Message, config: Config, lang: str, is_admin: bool = False) -> None:
     text = t(lang, "HELP", max_mb=config.max_mb)
     if config.contact:
         text += "\n" + t(lang, "CONTACT_LINE", contact=config.contact)
-    markup = menu_keyboard(lang) if message.chat.type == "private" else None
+    markup = menu_keyboard(lang, is_admin) if message.chat.type == "private" else None
     await message.answer(text, reply_markup=markup)
 
 
@@ -118,7 +124,7 @@ async def cmd_lang(message: Message, lang: str) -> None:
 
 
 async def on_lang(cb: CallbackQuery, bot: Bot, db: Database, user_mw: UserMiddleware,
-                  subs: SubscriptionChecker, lang_chosen: bool) -> None:
+                  subs: SubscriptionChecker, lang_chosen: bool, is_admin: bool = False) -> None:
     code = cb.data.split(":", 1)[1]
     if code not in LANGS:
         await cb.answer()
@@ -136,13 +142,13 @@ async def on_lang(cb: CallbackQuery, bot: Bot, db: Database, user_mw: UserMiddle
             await bot.send_message(
                 cb.message.chat.id,
                 t(code, "START", name=_greeting_name(cb.from_user.first_name)),
-                reply_markup=menu_keyboard(code),
+                reply_markup=menu_keyboard(code, is_admin),
             )
             await _subscribed(bot, subs, "private", cb.from_user.id, cb.message.answer, code)
         else:
             # Menyu tugmalari yangi tilda bo'lishi uchun
             await bot.send_message(cb.message.chat.id, t(code, "SEND_LINK"),
-                                   reply_markup=menu_keyboard(code))
+                                   reply_markup=menu_keyboard(code, is_admin))
 
 
 async def on_check_sub(cb: CallbackQuery, bot: Bot, subs: SubscriptionChecker, lang: str) -> None:
@@ -201,8 +207,8 @@ async def on_mp3(cb: CallbackQuery, deps: Deps, subs: SubscriptionChecker, lang:
                   kind="audio", reply_to=cb.message.message_id, lang=lang)
 
 
-async def on_text(message: Message, lang: str) -> None:
-    await message.answer(t(lang, "SEND_LINK"), reply_markup=menu_keyboard(lang))
+async def on_text(message: Message, lang: str, is_admin: bool = False) -> None:
+    await message.answer(t(lang, "SEND_LINK"), reply_markup=menu_keyboard(lang, is_admin))
 
 
 def get_router() -> Router:

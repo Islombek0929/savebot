@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import html
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -42,7 +43,10 @@ from .downloader import (
     normalize_url,
     platform_of,
     FATAL_CODES,
+    MediaFile,
     Probe,
+    Result,
+    _run,
     is_audio_site,
     prefers_gallery,
     prepare_files,
@@ -56,6 +60,8 @@ log = logging.getLogger(__name__)
 class AppState:
     restart_requested: bool = False
     broadcasting: bool = False
+    # Tarqatish uchun xabar kutilayotgan adminlar
+    awaiting_broadcast: set = field(default_factory=set)
 
 
 # ----------------------------------------------------------------------------------
@@ -377,6 +383,40 @@ async def alert_admins_login(d: Deps, error: DownloadError, url: str) -> None:
             await d.bot.send_message(admin_id, text)
 
 
+CACHED_VIDEO_KINDS = ["video144", "video240", "video360", "video480", "video", "video720",
+                      "video1080", "video1440", "video2160"]  # kichigidan — tezroq yuklab olinadi
+
+
+async def audio_from_cached_video(d: Deps, url: str, workdir: str) -> Result | None:
+    """MP3 ni avval yuborilgan videodan oladi — saytga (Instagram va h.k.) qayta so'rov yo'q.
+
+    Video Telegram'dan qaytarib olinadi (Local Bot API'da diskdan) va ffmpeg bilan MP3 qilinadi.
+    Bo'lmasa None — unda odatiy yo'l bilan saytdan yuklanadi."""
+    for kind in CACHED_VIDEO_KINDS:
+        cached = await d.db.cache_get(cache_key(kind, url), d.cfg.cache_days)
+        if cached and len(cached.items) == 1 and cached.items[0][0] == "video":
+            break
+    else:
+        return None
+    src = os.path.join(workdir, "source.mp4")
+    out = os.path.join(workdir, "audio.mp3")
+    try:
+        await d.bot.download(cached.items[0][1], destination=src, timeout=300)
+        code, _, err = await _run("ffmpeg", "-y", "-v", "error", "-i", src, "-vn",
+                                  "-c:a", "libmp3lame", "-b:a", "192k",
+                                  "-metadata", f"title={cached.title[:100]}", out, timeout=300)
+    except Exception as e:  # noqa: BLE001 — har qanday xatoda odatiy yo'lga qaytamiz
+        log.info("Keshdagi videodan MP3 bo'lmadi (%s): %s", url, e)
+        return None
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(src)
+    if code != 0 or not os.path.exists(out) or os.path.getsize(out) == 0:
+        log.info("ffmpeg MP3 xatosi (%s): %s", url, err[-200:])
+        return None
+    return Result(files=[MediaFile(out, "audio")], title=cached.title, platform=platform_of(url))
+
+
 async def _progress_ticker(status: Message, progress: Progress, lang: str) -> None:
     last = None
     while True:
@@ -465,14 +505,19 @@ async def deliver(
             with contextlib.suppress(TelegramAPIError):
                 await d.bot.send_chat_action(
                     chat_id, ChatAction.UPLOAD_VOICE if kind == "audio" else ChatAction.UPLOAD_VIDEO)
-            ticker = asyncio.create_task(_progress_ticker(status, progress, lang))
-            result = await asyncio.wait_for(
-                d.downloader.download(url, kind, workdir, progress, quality=quality,
-                                      info=info, ytdlp_error=ytdlp_error),
-                timeout=d.cfg.download_timeout + 120,
-            )
+            result = None
+            if kind == "audio":
+                result = await audio_from_cached_video(d, url, workdir)
+            if result is None:
+                ticker = asyncio.create_task(_progress_ticker(status, progress, lang))
+                result = await asyncio.wait_for(
+                    d.downloader.download(url, kind, workdir, progress, quality=quality,
+                                          info=info, ytdlp_error=ytdlp_error),
+                    timeout=d.cfg.download_timeout + 120,
+                )
             files = await prepare_files(result, d.cfg.max_bytes)
-            ticker.cancel()
+            if ticker:
+                ticker.cancel()
         if not files:
             raise DownloadError("too_big")
 

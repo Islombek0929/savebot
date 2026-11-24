@@ -453,3 +453,84 @@ async def test_instagram_login_required_fails_fast_and_alerts_admin(env):
     assert len(alerts) == 1 and "instagram" in alerts[0].text and "cookies" in alerts[0].text
     await dp.feed_update(bot, message("https://www.instagram.com/reel/XYZ2/", mid=2))
     assert len([c for c in session.of(SendMessage) if c.chat_id == ADMIN.id]) == 1  # soatiga 1 marta
+
+
+async def test_admin_sees_panel_button_and_panel(env, db):
+    dp, bot, session, _ = env
+    await db.set_lang(ADMIN.id, "uz")
+    await db.set_lang(USER.id, "uz")
+    await dp.feed_update(bot, message("/start", user=ADMIN))
+    rows = session.of(SendMessage)[-1].reply_markup.keyboard
+    assert rows[-1][0].text == "🛠 Admin panel" and rows[-1][0].style == "danger"
+    await dp.feed_update(bot, message("/start", user=USER, mid=2))
+    assert len(session.of(SendMessage)[-1].reply_markup.keyboard) == 1  # oddiy foydalanuvchida yo'q
+
+    await dp.feed_update(bot, message("🛠 Admin panel", user=ADMIN, mid=3))
+    panel = session.of(SendMessage)[-1]
+    labels = [b.text for row in panel.reply_markup.inline_keyboard for b in row]
+    assert labels == ["📊 Statistika", "📢 Xabar yuborish", "🔄 yt-dlp yangilash", "🚫 Ban / Unban"]
+    await dp.feed_update(bot, callback("adm:stats", user=ADMIN))
+    assert "Statistika" in session.of(EditMessageText)[-1].text
+
+    # Oddiy foydalanuvchi admin tugmasi matnini yozsa — panel ochilmaydi
+    n = len(session.of(SendMessage))
+    await dp.feed_update(bot, message("🛠 Admin panel", user=USER, mid=4))
+    assert "Statistika" not in session.of(SendMessage)[-1].text and len(session.of(SendMessage)) == n + 1
+
+
+async def test_broadcast_via_panel(env, db):
+    import asyncio
+    dp, bot, session, _ = env
+    for uid in (500, 501):
+        await db.touch_user(uid, "u", None)
+    await dp.feed_update(bot, callback("adm:bc", user=ADMIN))
+    assert "Xabar yuborish" in session.of(EditMessageText)[-1].text
+    await dp.feed_update(bot, message("Yangi funksiya qo'shildi!", user=ADMIN, mid=55))
+    confirm = session.of(SendMessage)[-1]
+    data = confirm.reply_markup.inline_keyboard[0][0].callback_data
+    assert data == "bc:yes:55"
+    await dp.feed_update(bot, callback(data, user=ADMIN))
+    for _ in range(50):
+        if not dp["app_state"].broadcasting:
+            break
+        await asyncio.sleep(0.05)
+    assert {c.chat_id for c in session.of(CopyMessage)} >= {500, 501}
+
+
+async def test_mp3_from_cached_video_without_site_request(env, tmp_path):
+    import shutil
+    import subprocess
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg kerak")
+    dp, bot, session, fake = env
+    sample = tmp_path / "sample.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1",
+                    "-f", "lavfi", "-i", "sine=duration=1", "-c:v", "libx264", "-c:a", "aac",
+                    "-shortest", str(sample)], check=True)
+    downloaded = []
+
+    async def fake_download(file, destination=None, **kw):
+        downloaded.append(file)
+        shutil.copy(sample, destination)
+
+    bot.download = fake_download
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/MP3TEST/"))
+    data = session.of(SendVideo)[0].reply_markup.inline_keyboard[0][0].callback_data
+    await dp.feed_update(bot, callback(data))
+    assert [k for _, k in fake.calls] == ["video"]  # Instagram'ga ikkinchi so'rov yo'q
+    assert downloaded and downloaded[0].startswith("VID")
+    assert session.of(SendAudio)
+
+
+async def test_mp3_falls_back_to_site_when_telegram_download_fails(env):
+    dp, bot, session, fake = env
+
+    async def broken(*a, **kw):
+        raise RuntimeError("file is too big")
+
+    bot.download = broken
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/FALLBACK/"))
+    data = session.of(SendVideo)[0].reply_markup.inline_keyboard[0][0].callback_data
+    await dp.feed_update(bot, callback(data))
+    assert [k for _, k in fake.calls] == ["video", "audio"]
+    assert session.of(SendAudio)
