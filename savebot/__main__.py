@@ -29,6 +29,7 @@ from .services import (
     DownloadQueue,
     ProbeCache,
     SubscriptionChecker,
+    cleanup_audio_tracks,
     parse_channels,
 )
 
@@ -95,7 +96,9 @@ async def _housekeeping(db: Database, cfg: Config) -> None:
     while True:
         with contextlib.suppress(Exception):
             await db.cleanup(cfg.cache_days)
-        await asyncio.sleep(6 * 3600)
+        with contextlib.suppress(Exception):
+            cleanup_audio_tracks(cfg)
+        await asyncio.sleep(3 * 3600)
 
 
 async def main() -> bool:

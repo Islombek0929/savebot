@@ -263,3 +263,21 @@ async def test_cookies_copy_used_and_removed(server, cfg, tmp_path):
     assert seen and all(p and p != str(src) for p in seen)  # asl fayl emas, nusxa
     assert not glob.glob(f"{cfg.tmp_dir}/ck_*")  # nusxa o'chirildi
     assert src.read_text() == original  # asl fayl o'zgarmadi
+
+
+async def test_audio_retries_via_video_after_403(cfg, tmp_path, monkeypatch):
+    dl = Downloader(cfg)
+    modes = []
+
+    def fake_sync(ctx):
+        modes.append(ctx.audio_via_video)
+        if not ctx.audio_via_video:
+            raise DownloadError("blocked", "unable to download video data: HTTP Error 403")
+        from savebot.downloader import MediaFile, Result
+        path = tmp_path / "a.mp3"
+        path.write_bytes(b"x")
+        return Result(files=[MediaFile(str(path), "audio")])
+
+    monkeypatch.setattr(dl, "_ytdlp_sync", fake_sync)
+    result = await dl.download("https://www.instagram.com/reel/a/", "audio", str(tmp_path))
+    assert modes == [False, True] and result.files

@@ -566,6 +566,7 @@ class _Ctx:
     quality: int | None = None  # foydalanuvchi tanlagan sifat (None — avtomatik)
     info: dict | None = None  # probe() natijasi — qayta so'rov yubormaslik uchun
     cookies: str | None = None  # cookies faylining shu yuklash uchun nusxasi
+    audio_via_video: bool = False  # alohida audio 403 bersa — video bilan yuklab ovozini ajratamiz
 
 
 class Downloader:
@@ -700,14 +701,18 @@ class Downloader:
         try:
             return await asyncio.to_thread(self._ytdlp_sync, ctx)
         except DownloadError as e:
-            # probe() dagi havolalar eskirgan yoki CDN 403 bergan bo'lsa — bir marta yangidan
             if ctx.info is not None and e.code in ("blocked", "private", "failed"):
-                log.info("Yangi ma'lumot bilan qayta urinish (%s): %s", e.code, ctx.url)
+                # probe() dagi havolalar eskirgan yoki CDN 403 bergan — bir marta yangidan
                 ctx.info = None
-                _clear(ctx.workdir)
-                await asyncio.sleep(1.5)
-                return await asyncio.to_thread(self._ytdlp_sync, ctx)
-            raise
+            elif ctx.kind == "audio" and not ctx.audio_via_video and e.code in ("blocked", "failed"):
+                # Instagram alohida audio faylga 403 beradi, video bilan birgasiga — yo'q
+                ctx.audio_via_video = True
+            else:
+                raise
+            log.info("Qayta urinish (%s, audio_via_video=%s): %s", e.code, ctx.audio_via_video, ctx.url)
+            _clear(ctx.workdir)
+            await asyncio.sleep(1.5)
+            return await asyncio.to_thread(self._ytdlp_sync, ctx)
 
     def _extract(self, ctx: _Ctx) -> tuple[dict, list[dict], float | None]:
         """Ma'lumot olish (yuklamasdan) va tekshirish: pleylist, jonli efir, davomiylik."""
@@ -743,7 +748,7 @@ class Downloader:
             if ctx.kind == "audio":
                 kbps = audio_bitrate(duration, self.cfg.max_bytes)
                 opts.update({
-                    "format": "ba/b",
+                    "format": "bv*+ba/b" if ctx.audio_via_video else "ba/b",
                     "max_filesize": self.cfg.max_bytes * 4,  # manba kattaroq bo'lishi mumkin
                     "writethumbnail": True,
                     "postprocessors": [

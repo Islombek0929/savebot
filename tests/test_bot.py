@@ -544,3 +544,48 @@ async def test_network_error_fails_fast_and_alerts_admin(env):
     assert any("tarmoq muammosi" in c.text for c in session.of(EditMessageText))
     alerts = [c for c in session.of(SendMessage) if c.chat_id == ADMIN.id]
     assert len(alerts) == 1 and "DNS" in alerts[0].text
+
+
+async def test_mp3_from_saved_audio_track_no_requests(env, tmp_path):
+    """Video yuborilganda ovoz saqlanadi, MP3 na saytga, na Telegram serveriga murojaat qilmaydi."""
+    import shutil
+    import subprocess
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg kerak")
+    dp, bot, session, fake = env
+    sample = tmp_path / "with_audio.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1",
+                    "-f", "lavfi", "-i", "sine=duration=1", "-c:v", "libx264", "-c:a", "aac",
+                    "-shortest", str(sample)], check=True)
+    real_download = fake.download
+
+    async def download_real_video(url, kind, workdir, progress=None, **kw):
+        result = await real_download(url, kind, workdir, progress, **kw)
+        if kind == "video":
+            shutil.copy(sample, result.files[0].path)
+        return result
+
+    fake.download = download_real_video
+
+    async def telegram_download_forbidden(*a, **kw):
+        raise AssertionError("Telegram serveridan yuklab olinmasligi kerak")
+
+    bot.download = telegram_download_forbidden
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/TRACK/"))
+    data = session.of(SendVideo)[0].reply_markup.inline_keyboard[0][0].callback_data
+    await dp.feed_update(bot, callback(data))
+    assert [k for _, k in fake.calls] == ["video"]  # Instagram'ga ikkinchi so'rov yo'q
+    assert session.of(SendAudio)
+
+
+def test_cleanup_audio_tracks(cfg):
+    import os
+    import time
+    from savebot.services import audio_track_path, cleanup_audio_tracks
+    old, new = audio_track_path(cfg, "https://a/1"), audio_track_path(cfg, "https://a/2")
+    os.makedirs(os.path.dirname(old), exist_ok=True)
+    for p in (old, new):
+        open(p, "wb").write(b"x")
+    os.utime(old, (time.time() - 72 * 3600,) * 2)
+    assert cleanup_audio_tracks(cfg) == 1
+    assert not os.path.exists(old) and os.path.exists(new)

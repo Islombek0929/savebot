@@ -403,34 +403,93 @@ CACHED_VIDEO_KINDS = ["video144", "video240", "video360", "video480", "video", "
                       "video1080", "video1440", "video2160"]  # kichigidan — tezroq yuklab olinadi
 
 
-async def audio_from_cached_video(d: Deps, url: str, workdir: str) -> Result | None:
-    """MP3 ni avval yuborilgan videodan oladi — saytga (Instagram va h.k.) qayta so'rov yo'q.
+AUDIO_KEEP_HOURS = 48
 
-    Video Telegram'dan qaytarib olinadi (Local Bot API'da diskdan) va ffmpeg bilan MP3 qilinadi.
-    Bo'lmasa None — unda odatiy yo'l bilan saytdan yuklanadi."""
+
+def audio_track_path(cfg: Config, url: str) -> str:
+    """Yuborilgan videoning ovoz yo'lagi saqlanadigan joy (data/audio/<kalit>.mka)."""
+    return os.path.join(os.path.dirname(os.path.abspath(cfg.db_path)), "audio", f"{link_key(url)}.mka")
+
+
+async def save_audio_track(cfg: Config, video_path: str, url: str) -> None:
+    """Videodan ovozni qayta kodlamasdan ajratib saqlaydi (~0.1 s). MP3 tugmasi shundan foydalanadi —
+    saytga (Instagram 403 beradi) va Telegram serveriga qayta murojaat kerak bo'lmaydi."""
+    path = audio_track_path(cfg, url)
+    tmp = path + ".tmp.mka"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        code, _, _ = await _run("ffmpeg", "-y", "-v", "error", "-i", video_path, "-vn",
+                                "-map", "0:a:0", "-c:a", "copy", tmp, timeout=60)
+        if code == 0 and os.path.getsize(tmp) > 0:
+            os.replace(tmp, path)
+    except (OSError, asyncio.TimeoutError) as e:
+        log.info("Ovoz yo'lagi saqlanmadi: %s", e)
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+
+
+def cleanup_audio_tracks(cfg: Config, max_age_hours: int = AUDIO_KEEP_HOURS) -> int:
+    folder = os.path.dirname(audio_track_path(cfg, "https://x"))
+    if not os.path.isdir(folder):
+        return 0
+    limit = time.time() - max_age_hours * 3600
+    removed = 0
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        with contextlib.suppress(OSError):
+            if os.path.getmtime(path) < limit:
+                os.remove(path)
+                removed += 1
+    return removed
+
+
+async def _to_mp3(src: str, out: str, title: str) -> bool:
+    code, _, err = await _run("ffmpeg", "-y", "-v", "error", "-i", src, "-vn",
+                              "-c:a", "libmp3lame", "-b:a", "192k",
+                              "-metadata", f"title={title[:100]}", out, timeout=300)
+    if code != 0 or not os.path.exists(out) or os.path.getsize(out) == 0:
+        log.info("ffmpeg MP3 xatosi: %s", err[-200:])
+        return False
+    return True
+
+
+async def audio_from_cached_video(d: Deps, url: str, workdir: str) -> Result | None:
+    """MP3 ni avval yuborilgan videodan oladi — saytga qayta so'rov yo'q.
+
+    1) saqlangan ovoz yo'lagi (data/audio) — eng tez va ishonchli;
+    2) videoni Telegram'dan qaytarib olish (oddiy Bot API'da 20 MB gacha);
+    Bo'lmasa None — unda saytdan yuklanadi."""
+    cached = None
     for kind in CACHED_VIDEO_KINDS:
         cached = await d.db.cache_get(cache_key(kind, url), d.cfg.cache_days)
         if cached and len(cached.items) == 1 and cached.items[0][0] == "video":
             break
-    else:
+        cached = None
+    title = cached.title if cached else ""
+    out = os.path.join(workdir, "audio.mp3")
+
+    track = audio_track_path(d.cfg, url)
+    if os.path.isfile(track):
+        try:
+            if await _to_mp3(track, out, title):
+                return Result(files=[MediaFile(out, "audio")], title=title, platform=platform_of(url))
+        except (OSError, asyncio.TimeoutError) as e:
+            log.info("Saqlangan ovozdan MP3 bo'lmadi (%s): %s", url, e)
+
+    if cached is None:
         return None
     src = os.path.join(workdir, "source.mp4")
-    out = os.path.join(workdir, "audio.mp3")
     try:
         await d.bot.download(cached.items[0][1], destination=src, timeout=300)
-        code, _, err = await _run("ffmpeg", "-y", "-v", "error", "-i", src, "-vn",
-                                  "-c:a", "libmp3lame", "-b:a", "192k",
-                                  "-metadata", f"title={cached.title[:100]}", out, timeout=300)
+        ok = await _to_mp3(src, out, title)
     except Exception as e:  # noqa: BLE001 — har qanday xatoda odatiy yo'lga qaytamiz
         log.info("Keshdagi videodan MP3 bo'lmadi (%s): %s", url, e)
         return None
     finally:
         with contextlib.suppress(OSError):
             os.remove(src)
-    if code != 0 or not os.path.exists(out) or os.path.getsize(out) == 0:
-        log.info("ffmpeg MP3 xatosi (%s): %s", url, err[-200:])
-        return None
-    return Result(files=[MediaFile(out, "audio")], title=cached.title, platform=platform_of(url))
+    return Result(files=[MediaFile(out, "audio")], title=title, platform=platform_of(url)) if ok else None
 
 
 async def _progress_ticker(status: Message, progress: Progress, lang: str) -> None:
@@ -553,6 +612,8 @@ async def deliver(
         log.info("Telegram'ga yuborildi: %.1fs", time.monotonic() - upload_started)
         if sent:
             await d.db.cache_set(ckey, sent, result.title)
+        if single_video:
+            await save_audio_track(d.cfg, files[0].path, url)
         await safe_delete(status)
         ok = True
     except DownloadError as e:
