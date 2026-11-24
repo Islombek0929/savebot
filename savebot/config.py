@@ -56,7 +56,7 @@ class Config:
 
     @property
     def cookies(self) -> str | None:
-        if self.cookies_file and os.path.exists(self.cookies_file):
+        if self.cookies_file and os.path.isfile(self.cookies_file):
             return self.cookies_file
         return None
 
@@ -79,7 +79,8 @@ def load_config() -> Config:
         max_quality=_int("MAX_QUALITY", 1440),
         max_duration=_int("MAX_DURATION", 3 * 60 * 60),
         download_timeout=_int("DOWNLOAD_TIMEOUT", 15 * 60),
-        cookies_file=os.getenv("COOKIES_FILE", "").strip() or None,
+        # Standart joy: cookies/cookies.txt (Docker'da ./cookies papkasi avtomatik ulanadi)
+        cookies_file=os.getenv("COOKIES_FILE", "").strip() or "cookies/cookies.txt",
         proxy=os.getenv("PROXY", "").strip() or None,
         db_path=os.getenv("DB_PATH", "data/bot.db"),
         tmp_dir=os.getenv("TMP_DIR", "").strip() or tempfile.gettempdir(),

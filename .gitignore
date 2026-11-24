@@ -3,6 +3,7 @@ data/
 *.db
 *.db-*
 cookies*.txt
+cookies/
 __pycache__/
 *.pyc
 .pytest_cache/

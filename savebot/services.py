@@ -211,7 +211,8 @@ def error_text(code: str, cfg: Config, lang: str) -> str:
         return t(lang, "ERR_TOO_BIG", max_mb=cfg.max_mb)
     if code == "too_long":
         return t(lang, "ERR_TOO_LONG", minutes=cfg.max_duration // 60)
-    key = {"private": "ERR_PRIVATE", "unsupported": "ERR_UNSUPPORTED", "not_found": "ERR_NOT_FOUND",
+    key = {"private": "ERR_PRIVATE", "blocked": "ERR_BLOCKED",
+           "unsupported": "ERR_UNSUPPORTED", "not_found": "ERR_NOT_FOUND",
            "live": "ERR_LIVE", "timeout": "ERR_TIMEOUT"}.get(code, "ERR_FAILED")
     return t(lang, key)
 
@@ -367,7 +368,7 @@ LOGIN_SITES = {"instagram", "youtube", "facebook", "tiktok", "twitter", "threads
 async def alert_admins_login(d: Deps, error: DownloadError, url: str) -> None:
     """Sayt login so'rasa — adminlarga soatiga bir marta xabar (odatda cookies kerakligini bildiradi)."""
     platform = platform_of(url)
-    if error.code != "private" or platform not in LOGIN_SITES or not d.cfg.admin_ids:
+    if error.code not in ("private", "blocked") or platform not in LOGIN_SITES or not d.cfg.admin_ids:
         return
     now = time.monotonic()
     if now - d.alerts.get(platform, -10**9) < 3600:
@@ -375,7 +376,8 @@ async def alert_admins_login(d: Deps, error: DownloadError, url: str) -> None:
     d.alerts[platform] = now
     cookies = ("cookies fayli ulangan, lekin eskirgan yoki akkaunt bloklangan bo'lishi mumkin"
                if d.cfg.cookies else "cookies fayli ulanmagan")
-    text = (f"⚠️ <b>{platform}</b> login so'rayapti ({cookies}).\n"
+    what = "login so'rayapti" if error.code == "private" else "server IP'sini cheklayapti (403/429)"
+    text = (f"⚠️ <b>{platform}</b> {what} ({cookies}).\n"
             f"Foydalanuvchilar bu saytdan yuklay olmayapti. README → «Instagram va cookies».\n\n"
             f"<code>{html.escape(error.detail[:300], quote=False)}</code>")
     for admin_id in d.cfg.admin_ids:

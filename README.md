@@ -85,7 +85,7 @@ shu sababli serverni Yevropada (Germaniya/Niderlandiya) olgan ma'qul. Foydalanuv
 | `CACHE_DAYS` | 30 | Kesh muddati |
 | `REQUIRED_CHANNELS` | — | `@kanal` yoki `-100ID\|https://t.me/+link`. Bot kanalda **admin** bo'lishi kerak |
 | `CONTACT` | — | /help da ko'rinadigan aloqa (DMCA uchun) |
-| `COOKIES_FILE` | — | Instagram/YouTube cookies fayli |
+| `COOKIES_FILE` | cookies/cookies.txt | Instagram/YouTube cookies fayli |
 | `PROXY` | — | `socks5://...` yoki `http://...` |
 | `LOCAL_API_URL` | — | Local Bot API manzili (2 GB gacha) |
 | `MAX_FILE_MB` | 50 / 2000 | Fayl chegarasi |
@@ -94,13 +94,25 @@ shu sababli serverni Yevropada (Germaniya/Niderlandiya) olgan ma'qul. Foydalanuv
 ## Muhim eslatmalar
 
 ### Instagram va cookies
-Instagram server IP'laridan kelgan so'rovlarni tez bloklaydi ("login required" xatosi). Bu holda:
-1. **Alohida** Instagram akkaunt oching (asosiy akkauntingizni ishlatmang, bloklanishi mumkin).
-2. Brauzerda shu akkauntga kiring va "Get cookies.txt LOCALLY" kengaytmasi bilan `cookies.txt` ni eksport qiling.
-3. Faylni server papkasiga qo'ying, `docker-compose.yml` dagi cookies qatoridan `#` ni olib tashlang,
-   `.env` ga `COOKIES_FILE=/app/cookies.txt` yozing va `docker compose up -d` qiling.
+Instagram server IP'laridan kelgan anonim so'rovlarni tez-tez rad etadi ("login required" yoki
+"HTTP Error 403"). Bunday bo'lsa, bot adminga ogohlantirish yuboradi. Yechim — cookies:
 
-Bitta faylga bir nechta sayt cookie'larini (Instagram + YouTube) qo'shish mumkin.
+1. **Alohida** Instagram akkaunt oching (asosiy akkauntingizni ishlatmang, bloklanishi mumkin).
+   Akkauntga rasm qo'yib, 2–3 ta sahifaga obuna bo'ling — "tirik" akkaunt kamroq bloklanadi.
+2. Kompyuterda Chrome'ga **"Get cookies.txt LOCALLY"** kengaytmasini o'rnating.
+3. instagram.com ga shu akkaunt bilan kiring → kengaytmani bosing → **Export** (`cookies.txt` yuklanadi).
+4. Faylni serverga `savebot/cookies/cookies.txt` qilib qo'ying. Eng oson usul — nusxa ko'chirish:
+   ```bash
+   mkdir -p /home/amix/savebot/cookies
+   nano /home/amix/savebot/cookies/cookies.txt
+   ```
+   Kompyuterda `cookies.txt` ni Bloknotda oching, hammasini nusxalang (Ctrl+A, Ctrl+C), nano'ga
+   joylang (sichqonchaning o'ng tugmasi), saqlang: **Ctrl+O**, **Enter**, **Ctrl+X**.
+5. `chmod 644 /home/amix/savebot/cookies/cookies.txt` va `docker compose restart bot`.
+6. Logda `Cookies ulangan` chiqsa — tayyor: `docker compose logs bot | grep -i cookies`
+
+`.env` yoki `docker-compose.yml` ni o'zgartirish shart emas. YouTube cookie'larini ham shu faylning
+oxiriga qo'shish mumkin. Cookies vaqt o'tib eskiradi — ogohlantirish yana kelsa, qaytadan eksport qiling.
 
 ### YouTube
 YouTube ba'zan server IP'sini bloklaydi ("Sign in to confirm you're not a bot"). Yechim: cookies

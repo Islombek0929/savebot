@@ -102,6 +102,8 @@ async def main() -> bool:
     os.makedirs(cfg.tmp_dir, exist_ok=True)
     for leftover in glob.glob(os.path.join(cfg.tmp_dir, "dl_*")):  # oldingi ishdan qolgan fayllar
         shutil.rmtree(leftover, ignore_errors=True)
+    for leftover in glob.glob(os.path.join(cfg.tmp_dir, "ck_*.txt")):
+        os.remove(leftover)
     if not shutil.which("ffmpeg"):
         log.warning("ffmpeg topilmadi! Video+audio birlashmaydi va MP3 ishlamaydi.")
 
@@ -120,6 +122,10 @@ async def main() -> bool:
         me = await bot.me()
         await _setup_profile(bot)
         await _setup_admin_commands(bot, cfg)
+        if cfg.cookies:
+            log.info("Cookies ulangan: %s", cfg.cookies)
+        else:
+            log.info("Cookies yo'q (%s) — Instagram tez-tez login so'rashi mumkin", cfg.cookies_file)
         if cfg.admin_ids:
             log.info("Adminlar: %s", ", ".join(map(str, sorted(cfg.admin_ids))))
         else:

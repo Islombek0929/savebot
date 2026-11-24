@@ -20,6 +20,7 @@ import re
 import shutil
 import socket
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -41,7 +42,7 @@ NO_WATERMARK = "[format_note!*=?watermark][format_id!^=?download]"
 
 # Bu xato kodlarida boshqa usul bilan qayta urinish ma'nosiz.
 # "private" — sayt login so'rayapti: gallery-dl ham xuddi shunday rad etadi, faqat vaqt ketadi.
-FATAL_CODES = {"live", "too_long", "too_big", "timeout", "private"}
+FATAL_CODES = {"live", "too_long", "too_big", "timeout", "private", "blocked"}
 # gallery-dl (zaxira usul) uchun maksimal vaqt — foydalanuvchi uzoq kutib qolmasin
 GALLERY_TIMEOUT = 120
 
@@ -445,6 +446,10 @@ def classify_error(text: str) -> str:
         return "too_big"
     if any(s in msg for s in ("unsupported url", "no suitable extractor", "is not a valid url")):
         return "unsupported"
+    if "login" not in msg and any(s in msg for s in (
+        "http error 403", "http error 429", "too many requests", "rate-limit", "rate limit",
+    )):
+        return "blocked"  # sayt server IP'sini vaqtincha cheklagan
     if any(s in msg for s in (
         "login", "log in", "sign in", "cookies", "private", "authentication",
         "rate-limit", "rate limit", "not available in your country", "age-restricted",
@@ -554,16 +559,33 @@ class _Ctx:
     deadline: float
     quality: int | None = None  # foydalanuvchi tanlagan sifat (None — avtomatik)
     info: dict | None = None  # probe() natijasi — qayta so'rov yubormaslik uchun
+    cookies: str | None = None  # cookies faylining shu yuklash uchun nusxasi
 
 
 class Downloader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
+    def _cookies_copy(self) -> str | None:
+        """Cookies faylining vaqtinchalik nusxasi.
+
+        yt-dlp va gallery-dl ish oxirida cookies faylini qayta yozadi: asl fayl faqat o'qish
+        uchun ulangan bo'lsa xato beradi, bir vaqtdagi yuklashlar esa uni buzib qo'yishi mumkin."""
+        if not self.cfg.cookies:
+            return None
+        os.makedirs(self.cfg.tmp_dir, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix="ck_", suffix=".txt", dir=self.cfg.tmp_dir)
+        os.close(fd)
+        shutil.copyfile(self.cfg.cookies, path)
+        return path
+
     async def probe(self, url: str) -> Probe:
         """Yuklamasdan ma'lumot oladi: nomi, davomiyligi va mavjud sifatlar."""
-        ctx = _Ctx(url, "video", "", Progress(), time.monotonic() + 90)
-        return await asyncio.to_thread(self._probe_sync, ctx)
+        ctx = _Ctx(url, "video", "", Progress(), time.monotonic() + 90, cookies=self._cookies_copy())
+        try:
+            return await asyncio.to_thread(self._probe_sync, ctx)
+        finally:
+            _remove(ctx.cookies)
 
     def _probe_sync(self, ctx: _Ctx) -> Probe:
         info, entries, duration = self._extract(ctx)
@@ -580,7 +602,15 @@ class Downloader:
         """quality — tanlangan sifat; info — probe() natijasi; ytdlp_error — probe'da yt-dlp
         xato bergan bo'lsa, uni qayta urinmasdan to'g'ridan-to'g'ri gallery-dl ga o'tamiz."""
         ctx = _Ctx(url, kind, workdir, progress or Progress(),
-                   time.monotonic() + self.cfg.download_timeout, quality=quality, info=info)
+                   time.monotonic() + self.cfg.download_timeout, quality=quality, info=info,
+                   cookies=self._cookies_copy())
+        try:
+            return await self._download(ctx, ytdlp_error)
+        finally:
+            _remove(ctx.cookies)
+
+    async def _download(self, ctx: _Ctx, ytdlp_error: DownloadError | None) -> Result:
+        url, kind, workdir = ctx.url, ctx.kind, ctx.workdir
         if ytdlp_error is not None and ytdlp_error.code in FATAL_CODES:
             raise ytdlp_error
         if kind == "audio":
@@ -640,14 +670,24 @@ class Downloader:
             "max_filesize": self.cfg.max_bytes,
             "progress_hooks": [hook],
         }
-        if self.cfg.cookies:
-            opts["cookiefile"] = self.cfg.cookies
+        if ctx.cookies:
+            opts["cookiefile"] = ctx.cookies
         if self.cfg.proxy:
             opts["proxy"] = self.cfg.proxy
         return opts
 
     async def _ytdlp(self, ctx: _Ctx) -> Result:
-        return await asyncio.to_thread(self._ytdlp_sync, ctx)
+        try:
+            return await asyncio.to_thread(self._ytdlp_sync, ctx)
+        except DownloadError as e:
+            # probe() dagi havolalar eskirgan yoki CDN 403 bergan bo'lsa — bir marta yangidan
+            if ctx.info is not None and e.code in ("blocked", "private", "failed"):
+                log.info("Yangi ma'lumot bilan qayta urinish (%s): %s", e.code, ctx.url)
+                ctx.info = None
+                _clear(ctx.workdir)
+                await asyncio.sleep(1.5)
+                return await asyncio.to_thread(self._ytdlp_sync, ctx)
+            raise
 
     def _extract(self, ctx: _Ctx) -> tuple[dict, list[dict], float | None]:
         """Ma'lumot olish (yuklamasdan) va tekshirish: pleylist, jonli efir, davomiylik."""
@@ -756,8 +796,8 @@ class Downloader:
             # bu juda sekin. Bitta post 1-3 so'rov, shuning uchun qisqa pauza yetarli.
             "-o", "extractor.instagram.sleep-request=0.5-1.5",
         ]
-        if self.cfg.cookies:
-            cmd += ["-C", self.cfg.cookies]
+        if ctx.cookies:
+            cmd += ["-C", ctx.cookies]
         if self.cfg.proxy:
             cmd += ["--proxy", self.cfg.proxy]
         cmd += ["--", ctx.url]
@@ -815,6 +855,14 @@ def _gallery_title(workdir: str) -> str:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return ""
+
+
+def _remove(path: str | None) -> None:
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def _clear(workdir: str) -> None:

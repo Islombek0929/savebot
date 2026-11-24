@@ -218,3 +218,48 @@ async def test_private_error_skips_gallery(cfg, tmp_path, monkeypatch):
         await dl.download("https://www.instagram.com/reel/x/", "video", str(tmp_path),
                           ytdlp_error=DownloadError("private", "login required"))
     assert e.value.code == "private"
+
+
+async def test_retry_with_fresh_info_after_403(cfg, tmp_path, monkeypatch):
+    dl = Downloader(cfg)
+    calls = []
+
+    def fake_sync(ctx):
+        calls.append(ctx.info)
+        if ctx.info is not None:
+            raise DownloadError("blocked", "HTTP Error 403: Forbidden")
+        from savebot.downloader import MediaFile, Result
+        path = tmp_path / "ok.mp4"
+        path.write_bytes(b"x")
+        return Result(files=[MediaFile(str(path), "video")])
+
+    monkeypatch.setattr(dl, "_ytdlp_sync", fake_sync)
+    result = await dl.download("https://www.instagram.com/reel/a/", "video", str(tmp_path),
+                               info={"id": "old"})
+    assert calls == [{"id": "old"}, None] and result.files
+
+
+async def test_cookies_copy_used_and_removed(server, cfg, tmp_path):
+    import glob
+    from dataclasses import replace
+    base, _ = server
+    src = tmp_path / "cookies.txt"
+    original = "# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tTRUE\t2000000000\ta\tb\n"
+    src.write_text(original)
+    cfg = replace(cfg, cookies_file=str(src))
+    dl = Downloader(cfg)
+    seen = []
+    real_base = dl._base_opts
+
+    def spy(ctx):
+        seen.append(ctx.cookies)
+        return real_base(ctx)
+
+    dl._base_opts = spy
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    result = await dl.download(f"{base}/clean.mp4", "video", str(workdir))
+    assert result.files
+    assert seen and all(p and p != str(src) for p in seen)  # asl fayl emas, nusxa
+    assert not glob.glob(f"{cfg.tmp_dir}/ck_*")  # nusxa o'chirildi
+    assert src.read_text() == original  # asl fayl o'zgarmadi

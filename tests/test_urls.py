@@ -82,6 +82,8 @@ def test_clean_title_removes_owner():
     ("ERROR: Unsupported URL: https://x.y", "unsupported"),
     ("ERROR: Unsupported URL: https://site.com/page.html", "unsupported"),
     ("ERROR: Sign in to confirm your age", "private"),
+    ("ERROR: unable to download video data: HTTP Error 403: Forbidden", "blocked"),
+    ("ERROR: HTTP Error 429: Too Many Requests", "blocked"),
     ("ERROR: [youtube] x: Video unavailable", "not_found"),
     ("ERROR: something weird", "failed"),
 ])

@@ -129,6 +129,11 @@ _T: dict[str, dict[str, str]] = {
         "ru": "🔒 Контент закрыт или требует входа в аккаунт.",
         "en": "🔒 This content is private or requires login.",
     },
+    "ERR_BLOCKED": {
+        "uz": "⏳ Sayt vaqtincha cheklov qo'ydi. Birozdan keyin qayta urinib ko'ring.",
+        "ru": "⏳ Сайт временно ограничил доступ. Попробуйте чуть позже.",
+        "en": "⏳ The site is temporarily limiting requests. Please try again a bit later.",
+    },
     "ERR_UNSUPPORTED": {
         "uz": "❌ Bu havola qo'llab-quvvatlanmaydi.",
         "ru": "❌ Эта ссылка не поддерживается.",
