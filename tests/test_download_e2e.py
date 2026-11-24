@@ -281,3 +281,13 @@ async def test_audio_retries_via_video_after_403(cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(dl, "_ytdlp_sync", fake_sync)
     result = await dl.download("https://www.instagram.com/reel/a/", "audio", str(tmp_path))
     assert modes == [False, True] and result.files
+
+
+def test_pot_provider_extractor_args(cfg):
+    from dataclasses import replace
+    from savebot.downloader import Progress, _Ctx
+    ctx = _Ctx("https://youtu.be/x", "video", "", Progress(), 0)
+    assert "extractor_args" not in Downloader(cfg)._base_opts(ctx)
+    cfg2 = replace(cfg, pot_provider_url="http://pot-provider:4416")
+    args = Downloader(cfg2)._base_opts(ctx)["extractor_args"]
+    assert args == {"youtubepot-bgutilhttp": {"base_url": ["http://pot-provider:4416"]}}

@@ -695,6 +695,9 @@ class Downloader:
             opts["cookiefile"] = ctx.cookies
         if self.cfg.proxy:
             opts["proxy"] = self.cfg.proxy
+        if self.cfg.pot_provider_url:
+            # YouTube 403 ("PO Token" talab qilinadi) — tokenni pot-provider xizmatidan olamiz
+            opts["extractor_args"] = {"youtubepot-bgutilhttp": {"base_url": [self.cfg.pot_provider_url]}}
         return opts
 
     async def _ytdlp(self, ctx: _Ctx) -> Result:

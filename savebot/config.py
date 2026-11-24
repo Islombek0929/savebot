@@ -41,6 +41,8 @@ class Config:
     cookies_file: str | None = None
     # Proxy (masalan socks5://user:pass@host:1080) — sayt server IP'sini bloklasa
     proxy: str | None = None
+    # YouTube PO Token serveri (docker compose'dagi pot-provider), masalan http://pot-provider:4416
+    pot_provider_url: str | None = None
     db_path: str = "data/bot.db"
     tmp_dir: str = field(default_factory=tempfile.gettempdir)
     # Majburiy obuna kanallari: @kanal yoki -100... ID (bot kanalda admin bo'lishi shart)
@@ -82,6 +84,7 @@ def load_config() -> Config:
         # Standart joy: cookies/cookies.txt (Docker'da ./cookies papkasi avtomatik ulanadi)
         cookies_file=os.getenv("COOKIES_FILE", "").strip() or "cookies/cookies.txt",
         proxy=os.getenv("PROXY", "").strip() or None,
+        pot_provider_url=os.getenv("POT_PROVIDER_URL", "").strip() or None,
         db_path=os.getenv("DB_PATH", "data/bot.db"),
         tmp_dir=os.getenv("TMP_DIR", "").strip() or tempfile.gettempdir(),
         required_channels=tuple(_list("REQUIRED_CHANNELS")),

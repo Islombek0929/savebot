@@ -26,6 +26,14 @@ services:
     volumes:
       - tg-bot-api:/var/lib/telegram-bot-api
 
+  # YouTube "PO Token" serveri: YouTube video fayliga 403 bersa kerak bo'ladi.
+  # Yoqish: .env da COMPOSE_PROFILES=localapi,youtube va POT_PROVIDER_URL=http://pot-provider:4416
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider
+    profiles: ["youtube"]
+    restart: always
+    init: true
+
 volumes:
   bot-data:
   tg-bot-api:
