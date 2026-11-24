@@ -30,6 +30,7 @@ DOH_SERVERS = (
 )
 
 _original_getaddrinfo = socket.getaddrinfo
+_original_gethostbyname = socket.gethostbyname
 _cache: dict[str, tuple[float, list[str]]] = {}
 _lock = threading.Lock()
 _installed = False
@@ -76,10 +77,9 @@ def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     try:
         return _original_getaddrinfo(host, port, family, type, proto, flags)
     except socket.gaierror:
-        if not isinstance(host, str) or not host or _is_ip(host) or host == "localhost" \
-                or "." not in host or family == socket.AF_INET6:
+        name = _fallback_name(host)
+        if name is None or family == socket.AF_INET6:
             raise
-        name = host.rstrip(".").lower()
         ips = resolve(name)
         if not ips:
             raise
@@ -95,10 +95,40 @@ def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
         return results
 
 
+def _fallback_name(host) -> str | None:
+    if not isinstance(host, str) or not host or _is_ip(host) or host == "localhost" or "." not in host:
+        return None
+    return host.rstrip(".").lower()
+
+
+def _gethostbyname(host):
+    try:
+        return _original_gethostbyname(host)
+    except socket.gaierror:
+        name = _fallback_name(host)
+        ips = resolve(name) if name else []
+        if not ips:
+            raise
+        log.info("DNS zaxirasi (DoH): %s -> %s", name, ips[0])
+        return ips[0]
+
+
 def install() -> None:
     """socket.getaddrinfo ni zaxirali versiyaga almashtiradi (DOH_FALLBACK=0 bo'lsa — yo'q)."""
     global _installed
     if _installed or os.getenv("DOH_FALLBACK", "1").strip() in ("0", "false", "no"):
         return
     socket.getaddrinfo = _getaddrinfo
+    socket.gethostbyname = _gethostbyname
     _installed = True
+
+
+if __name__ == "__main__":  # diagnostika: python -m savebot.dnsfix instagram.com ...
+    import sys
+
+    for host in sys.argv[1:] or ["instagram.ftas2-2.fna.fbcdn.net", "api.telegram.org"]:
+        try:
+            print(f"{host}: tizim DNS -> {_original_gethostbyname(host)}")
+        except OSError as e:
+            ips = doh_query(host)
+            print(f"{host}: tizim DNS xato ({e}); DoH -> {ips or 'topilmadi'}")

@@ -75,3 +75,14 @@ def test_install_respects_env(monkeypatch):
     original = socket.getaddrinfo
     dnsfix.install()
     assert socket.getaddrinfo is original
+
+
+def test_gethostbyname_fallback(monkeypatch):
+    def failing(host):
+        raise socket.gaierror(-3, "Temporary failure in name resolution")
+
+    monkeypatch.setattr(dnsfix, "_original_gethostbyname", failing)
+    monkeypatch.setattr(dnsfix, "doh_query", lambda name, timeout=5.0: ["84.54.107.98"])
+    assert dnsfix._gethostbyname("instagram.ftas2-2.fna.fbcdn.net") == "84.54.107.98"
+    with pytest.raises(socket.gaierror):
+        dnsfix._gethostbyname("localhost")
