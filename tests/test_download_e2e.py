@@ -205,3 +205,16 @@ async def test_download_reuses_probe_info(server, cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", boom)
     result = await dl.download("https://youtu.be/yt1", "video", str(tmp_path), info=probe.info)
     assert md5(result.files[0].path) == md5(root / "v720.mp4")
+
+
+async def test_private_error_skips_gallery(cfg, tmp_path, monkeypatch):
+    dl = Downloader(cfg)
+
+    async def boom(ctx):
+        raise AssertionError("gallery-dl chaqirilmasligi kerak")
+
+    monkeypatch.setattr(dl, "_gallery", boom)
+    with pytest.raises(DownloadError) as e:
+        await dl.download("https://www.instagram.com/reel/x/", "video", str(tmp_path),
+                          ytdlp_error=DownloadError("private", "login required"))
+    assert e.value.code == "private"

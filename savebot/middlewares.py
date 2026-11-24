@@ -66,7 +66,8 @@ class UserMiddleware(BaseMiddleware):
         private = chat is not None and chat.type == "private"
         if private:
             now = time.monotonic()
-            if now - self._touched.get(user.id, 0) > 300:
+            last = self._touched.get(user.id)
+            if last is None or now - last > 300:  # monotonic() kichik bo'lishi mumkin (yangi yongan server)
                 self._touched[user.id] = now
                 await self.db.touch_user(user.id, user.first_name, user.username)
 

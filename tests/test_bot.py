@@ -441,3 +441,15 @@ async def test_broadcast(env, db):
             break
         await asyncio.sleep(0.05)
     assert sorted(c.chat_id for c in session.of(CopyMessage)) == [1, 500, 501, 502]  # admin ham bazada
+
+
+async def test_instagram_login_required_fails_fast_and_alerts_admin(env):
+    dp, bot, session, fake = env
+    fake.probe_error = "private"
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/XYZ/"))
+    assert not fake.calls  # gallery-dl bilan behuda kutilmaydi
+    assert any("yopiq yoki login" in c.text for c in session.of(EditMessageText))
+    alerts = [c for c in session.of(SendMessage) if c.chat_id == ADMIN.id]
+    assert len(alerts) == 1 and "instagram" in alerts[0].text and "cookies" in alerts[0].text
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/XYZ2/", mid=2))
+    assert len([c for c in session.of(SendMessage) if c.chat_id == ADMIN.id]) == 1  # soatiga 1 marta

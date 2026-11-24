@@ -39,8 +39,11 @@ JUNK_SUFFIXES = (".part", ".ytdl", ".temp", ".json", ".description", ".tmp")
 # Suv belgili formatlarni chiqarib tashlovchi filtr (format_note ichida "watermark" bo'lmasin)
 NO_WATERMARK = "[format_note!*=?watermark][format_id!^=?download]"
 
-# Bu xato kodlarida boshqa usul bilan qayta urinish ma'nosiz
-FATAL_CODES = {"live", "too_long", "too_big", "timeout"}
+# Bu xato kodlarida boshqa usul bilan qayta urinish ma'nosiz.
+# "private" — sayt login so'rayapti: gallery-dl ham xuddi shunday rad etadi, faqat vaqt ketadi.
+FATAL_CODES = {"live", "too_long", "too_big", "timeout", "private"}
+# gallery-dl (zaxira usul) uchun maksimal vaqt — foydalanuvchi uzoq kutib qolmasin
+GALLERY_TIMEOUT = 120
 
 
 class DownloadError(Exception):
@@ -578,6 +581,8 @@ class Downloader:
         xato bergan bo'lsa, uni qayta urinmasdan to'g'ridan-to'g'ri gallery-dl ga o'tamiz."""
         ctx = _Ctx(url, kind, workdir, progress or Progress(),
                    time.monotonic() + self.cfg.download_timeout, quality=quality, info=info)
+        if ytdlp_error is not None and ytdlp_error.code in FATAL_CODES:
+            raise ytdlp_error
         if kind == "audio":
             order = [self._ytdlp]
         elif ytdlp_error is not None:
@@ -630,7 +635,7 @@ class Downloader:
             "socket_timeout": 30,
             "retries": 3,
             "fragment_retries": 3,
-            "extractor_retries": 2,
+            "extractor_retries": 1,
             "concurrent_fragment_downloads": 4,
             "max_filesize": self.cfg.max_bytes,
             "progress_hooks": [hook],
@@ -734,7 +739,7 @@ class Downloader:
 
     # ---------------- gallery-dl ----------------
     async def _gallery(self, ctx: _Ctx) -> Result:
-        remaining = ctx.deadline - time.monotonic()
+        remaining = min(ctx.deadline - time.monotonic(), GALLERY_TIMEOUT)
         if remaining <= 5:
             raise DownloadError("timeout")
         cmd = [
@@ -747,6 +752,9 @@ class Downloader:
             "--no-mtime",
             "--write-metadata",
             "-o", "output.progress=false",
+            # Standart holatda Instagram so'rovlari orasida 6-12 soniya kutadi — bitta post uchun
+            # bu juda sekin. Bitta post 1-3 so'rov, shuning uchun qisqa pauza yetarli.
+            "-o", "extractor.instagram.sleep-request=0.5-1.5",
         ]
         if self.cfg.cookies:
             cmd += ["-C", self.cfg.cookies]

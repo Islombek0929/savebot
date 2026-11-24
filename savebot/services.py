@@ -11,7 +11,7 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from aiogram import Bot
 from aiogram.enums import ButtonStyle, ChatAction, ChatMemberStatus
@@ -352,6 +352,29 @@ class Deps:
     db: Database
     downloader: Downloader
     queue: DownloadQueue
+    alerts: dict = field(default_factory=dict)  # platforma -> oxirgi ogohlantirish vaqti
+
+
+LOGIN_SITES = {"instagram", "youtube", "facebook", "tiktok", "twitter", "threads"}
+
+
+async def alert_admins_login(d: Deps, error: DownloadError, url: str) -> None:
+    """Sayt login so'rasa — adminlarga soatiga bir marta xabar (odatda cookies kerakligini bildiradi)."""
+    platform = platform_of(url)
+    if error.code != "private" or platform not in LOGIN_SITES or not d.cfg.admin_ids:
+        return
+    now = time.monotonic()
+    if now - d.alerts.get(platform, -10**9) < 3600:
+        return
+    d.alerts[platform] = now
+    cookies = ("cookies fayli ulangan, lekin eskirgan yoki akkaunt bloklangan bo'lishi mumkin"
+               if d.cfg.cookies else "cookies fayli ulanmagan")
+    text = (f"⚠️ <b>{platform}</b> login so'rayapti ({cookies}).\n"
+            f"Foydalanuvchilar bu saytdan yuklay olmayapti. README → «Instagram va cookies».\n\n"
+            f"<code>{html.escape(error.detail[:300], quote=False)}</code>")
+    for admin_id in d.cfg.admin_ids:
+        with contextlib.suppress(TelegramAPIError):
+            await d.bot.send_message(admin_id, text)
 
 
 async def _progress_ticker(status: Message, progress: Progress, lang: str) -> None:
@@ -468,6 +491,7 @@ async def deliver(
     except DownloadError as e:
         log.info("Yuklanmadi [%s] %s: %s", e.code, url, e.detail[:200])
         await fail(error_text(e.code, d.cfg, lang))
+        await alert_admins_login(d, e, url)
     except asyncio.TimeoutError:
         log.warning("Vaqt tugadi: %s", url)
         await fail(t(lang, "ERR_TIMEOUT"))
@@ -587,7 +611,9 @@ async def handle_link(d: Deps, probes: ProbeCache, *, chat_id: int, user_id: int
                 probe = await asyncio.wait_for(d.downloader.probe(url), timeout=120)
         except DownloadError as e:
             if e.code in FATAL_CODES:
+                log.info("Probe xatosi [%s] %s: %s", e.code, url, e.detail[:200])
                 await safe_edit(status, error_text(e.code, d.cfg, lang))
+                await alert_admins_login(d, e, url)
                 return
             # yt-dlp tanimadi — rasm bo'lishi mumkin, gallery-dl bilan urinamiz
             await deliver(d, kind="video", status=status, ytdlp_error=e, **common)
