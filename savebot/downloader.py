@@ -803,7 +803,10 @@ class Downloader:
         if remaining <= 5:
             raise DownloadError("timeout")
         cmd = [
-            sys.executable, "-m", "gallery_dl",
+            # gallery-dl alohida jarayon — unga ham DNS zaxirasini ulaymiz
+            sys.executable, "-c",
+            "import sys; from savebot import dnsfix; dnsfix.install(); "
+            "from gallery_dl import main; sys.argv[0] = 'gallery-dl'; sys.exit(main())",
             "-D", ctx.workdir,
             "--range", "1-10",
             "--filesize-max", f"{self.cfg.max_mb}M",

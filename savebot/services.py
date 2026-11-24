@@ -373,8 +373,8 @@ async def alert_admins_login(d: Deps, error: DownloadError, url: str) -> None:
     if error.code == "network":
         await _alert_once(d, "network", (
             "🌐 <b>Serverda DNS/tarmoq xatosi</b> — bot saytlarga ulana olmayapti.\n"
-            "docker-compose.yml da <code>dns:</code> sozlamasi borligini tekshiring va "
-            "<code>docker compose up -d</code> qiling.\n\n"
+            "Mahalliy DNS ham, DNS-over-HTTPS zaxirasi (1.1.1.1 / 8.8.8.8, 443-port) ham "
+            "ishlamadi. Server tarmog'ini (firewall) tekshiring yoki <code>PROXY</code> sozlang.\n\n"
             f"<code>{html.escape(error.detail[:300], quote=False)}</code>"))
         return
     if error.code not in ("private", "blocked") or platform not in LOGIN_SITES:

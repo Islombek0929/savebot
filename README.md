@@ -114,6 +114,12 @@ Instagram server IP'laridan kelgan anonim so'rovlarni tez-tez rad etadi ("login 
 `.env` yoki `docker-compose.yml` ni o'zgartirish shart emas. YouTube cookie'larini ham shu faylning
 oxiriga qo'shish mumkin. Cookies vaqt o'tib eskiradi — ogohlantirish yana kelsa, qaytadan eksport qiling.
 
+### "Temporary failure in name resolution"
+Server tarmog'i (ofis, o'quv markazi) tashqi DNS ni yopib qo'ygan va mahalliy DNS Instagram/Facebook
+CDN (`fbcdn.net`) manzillarini topa olmasa shunday bo'ladi. Bot bunday holatda manzilni avtomatik
+DNS-over-HTTPS (443-port) orqali so'raydi — logda `DNS zaxirasi (DoH)` qatori ko'rinadi.
+Bu ham ishlamasa, adminga ogohlantirish keladi: unda `PROXY` sozlang yoki botni boshqa serverga ko'chiring.
+
 ### YouTube
 YouTube ba'zan server IP'sini bloklaydi ("Sign in to confirm you're not a bot"). Yechim: cookies
 (yuqoridagidek) yoki `PROXY`. YouTube uchun kerakli JavaScript runtime (deno) avtomatik o'rnatiladi.

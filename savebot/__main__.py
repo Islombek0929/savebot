@@ -16,6 +16,7 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeChat
 
+from . import dnsfix
 from .config import Config, load_config
 from .db import Database
 from .downloader import Downloader, versions
@@ -144,6 +145,7 @@ async def main() -> bool:
 
 
 def run() -> None:
+    dnsfix.install()  # tizim DNS i nomni topa olmasa — DNS-over-HTTPS zaxirasi
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
     restart = asyncio.run(main())
