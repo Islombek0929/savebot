@@ -1,0 +1,300 @@
+"""Bot handlerlarini soxta Telegram sessiyasi bilan tekshirish (tarmoqsiz)."""
+import datetime
+import os
+
+import pytest
+from aiogram import Bot
+from aiogram.client.session.base import BaseSession
+from aiogram.enums import ChatMemberStatus
+from aiogram.methods import (
+    CopyMessage,
+    DeleteMessage,
+    EditMessageText,
+    GetChatMember,
+    GetMe,
+    SendAudio,
+    SendMediaGroup,
+    SendMessage,
+    SendPhoto,
+    SendVideo,
+)
+from aiogram.types import (
+    Audio,
+    CallbackQuery,
+    Chat,
+    ChatMemberLeft,
+    ChatMemberMember,
+    Message,
+    PhotoSize,
+    Update,
+    User,
+    Video,
+)
+
+from savebot.__main__ import build
+from savebot.downloader import DownloadError, MediaFile, Result
+
+NOW = datetime.datetime.now()
+BOT_USER = User(id=42, is_bot=True, first_name="Save", username="save_test_bot")
+USER = User(id=500, is_bot=False, first_name="Ali")
+ADMIN = User(id=1, is_bot=False, first_name="Admin")
+
+
+class MockSession(BaseSession):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+        self.member_status = ChatMemberStatus.MEMBER
+        self._mid = 1000
+
+    def _msg(self, chat_id, **kw):
+        self._mid += 1
+        return Message(message_id=self._mid, date=NOW, chat=Chat(id=chat_id, type="private"),
+                       from_user=BOT_USER, **kw)
+
+    async def make_request(self, bot, method, timeout=None):
+        self.calls.append(method)
+        result = self._respond(method)
+        if isinstance(result, list):
+            return [r.as_(bot) for r in result]
+        return result.as_(bot) if hasattr(result, "as_") else result
+
+    def _respond(self, method):
+        if isinstance(method, GetMe):
+            return BOT_USER
+        if isinstance(method, SendVideo):
+            return self._msg(method.chat_id, video=Video(
+                file_id=f"VID{self._mid}", file_unique_id="u", width=1, height=1, duration=1),
+                caption=method.caption)
+        if isinstance(method, SendAudio):
+            return self._msg(method.chat_id, audio=Audio(file_id=f"AUD{self._mid}", file_unique_id="u", duration=1))
+        if isinstance(method, SendPhoto):
+            return self._msg(method.chat_id, photo=[PhotoSize(file_id=f"PH{self._mid}", file_unique_id="u", width=1, height=1)])
+        if isinstance(method, SendMediaGroup):
+            out = []
+            for m in method.media:
+                if m.type == "photo":
+                    out.append(self._msg(method.chat_id, photo=[PhotoSize(file_id=f"PH{self._mid}", file_unique_id="u", width=1, height=1)]))
+                else:
+                    out.append(self._msg(method.chat_id, video=Video(file_id=f"VID{self._mid}", file_unique_id="u", width=1, height=1, duration=1)))
+            return out
+        if isinstance(method, (SendMessage, EditMessageText)):
+            return self._msg(getattr(method, "chat_id", 0) or 0, text=method.text,
+                             reply_markup=method.reply_markup)
+        if isinstance(method, GetChatMember):
+            if self.member_status == ChatMemberStatus.LEFT:
+                return ChatMemberLeft(user=USER)
+            return ChatMemberMember(user=USER)
+        if isinstance(method, CopyMessage):
+            from aiogram.types import MessageId
+            return MessageId(message_id=1)
+        return True  # SendChatAction, DeleteMessage, AnswerCallbackQuery ...
+
+    async def close(self):
+        pass
+
+    async def stream_content(self, *a, **kw):  # pragma: no cover
+        raise NotImplementedError
+
+    def of(self, kind):
+        return [c for c in self.calls if isinstance(c, kind)]
+
+
+class FakeDownloader:
+    """Haqiqiy yuklash o'rniga workdir'ga fayl yozadi."""
+
+    def __init__(self, kinds=("video",), error=None):
+        self.kinds = kinds
+        self.error = error
+        self.calls = []
+
+    async def download(self, url, kind, workdir, progress=None):
+        self.calls.append((url, kind))
+        if self.error:
+            raise DownloadError(self.error)
+        files = []
+        kinds = ["audio"] if kind == "audio" else list(self.kinds)
+        for i, k in enumerate(kinds):
+            ext = {"video": ".mp4", "audio": ".mp3", "photo": ".jpg"}[k]
+            path = os.path.join(workdir, f"f{i}{ext}")
+            with open(path, "wb") as f:
+                f.write(b"x" * 100)
+            files.append(MediaFile(path, k))
+        return Result(files=files, title="Sarlavha <b>", platform="instagram", performer="Art")
+
+
+async def _noprobe(path):
+    return 720, 1280, 10
+
+
+@pytest.fixture
+async def env(cfg, db, monkeypatch, tmp_path):
+    os.makedirs(cfg.tmp_dir, exist_ok=True)
+    monkeypatch.setattr("savebot.downloader.probe_video", _noprobe)
+
+    async def public(url):
+        return True
+
+    monkeypatch.setattr("savebot.services.is_public_url", public)
+    session = MockSession()
+    bot = Bot("42:TEST", session=session)
+    dp = await build(cfg, bot, db)
+    fake = FakeDownloader()
+    dp["deps"].downloader = fake
+    return dp, bot, session, fake
+
+
+def message(text, user=USER, chat_type="private", chat_id=None, mid=1):
+    return Update(update_id=mid, message=Message(
+        message_id=mid, date=NOW, text=text, from_user=user,
+        chat=Chat(id=chat_id or user.id, type=chat_type)))
+
+
+def callback(data, user=USER, msg_text="x", reply_to_mid=None):
+    msg = Message(message_id=77, date=NOW, text=msg_text, chat=Chat(id=user.id, type="private"),
+                  from_user=BOT_USER)
+    return Update(update_id=9, callback_query=CallbackQuery(
+        id="cb1", from_user=user, chat_instance="ci", data=data, message=msg))
+
+
+async def test_start(env):
+    dp, bot, session, _ = env
+    await dp.feed_update(bot, message("/start"))
+    text = session.of(SendMessage)[0].text
+    assert "Salom" in text and "Ali" in text
+
+
+async def test_instagram_link_sends_clean_video_with_mp3_button(env, db):
+    dp, bot, session, fake = env
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/ABC/?igsh=zz"))
+    assert fake.calls == [("https://www.instagram.com/reel/ABC/?igsh=zz", "video")]
+    video = session.of(SendVideo)[0]
+    assert video.caption == "Sarlavha &lt;b&gt;\n\n📥 @save_test_bot"  # HTML xavfsiz
+    assert (video.width, video.height, video.duration) == (720, 1280, 10)
+    assert video.reply_markup.inline_keyboard[0][0].callback_data.startswith("mp3:")
+    assert session.of(DeleteMessage)  # "Yuklanmoqda" xabari o'chirildi
+    s = await db.stats()
+    assert s["dl_total"] == 1 and s["users"] == 1
+
+
+async def test_second_request_served_from_cache(env, db):
+    dp, bot, session, fake = env
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/ABC/", mid=1))
+    await dp.feed_update(bot, message("https://instagram.com/reel/ABC?utm_source=x", mid=2))
+    assert len(fake.calls) == 1  # ikkinchisi keshdan
+    second = session.of(SendVideo)[1]
+    assert isinstance(second.video, str) and second.video.startswith("VID")
+    assert (await db.stats())["cache_today"] == 1
+
+
+async def test_mp3_button(env):
+    dp, bot, session, fake = env
+    await dp.feed_update(bot, message("https://www.tiktok.com/@u/video/1"))
+    data = session.of(SendVideo)[0].reply_markup.inline_keyboard[0][0].callback_data
+    await dp.feed_update(bot, callback(data))
+    assert fake.calls[-1] == ("https://www.tiktok.com/@u/video/1", "audio")
+    audio = session.of(SendAudio)[0]
+    assert audio.performer == "Art"
+
+
+async def test_youtube_asks_format_then_downloads(env):
+    dp, bot, session, fake = env
+    await dp.feed_update(bot, message("https://youtu.be/dQw4w9WgXcQ"))
+    assert not fake.calls
+    kb = session.of(SendMessage)[0].reply_markup.inline_keyboard[0]
+    assert [b.text for b in kb] == ["🎬 Video", "🎵 MP3"]
+    await dp.feed_update(bot, callback(kb[1].callback_data))
+    assert fake.calls == [("https://youtu.be/dQw4w9WgXcQ", "audio")]
+    assert session.of(SendAudio)
+
+
+async def test_album_for_carousel(env):
+    dp, bot, session, fake = env
+    fake.kinds = ("photo", "video", "photo")
+    await dp.feed_update(bot, message("https://www.instagram.com/p/XYZ/"))
+    group = session.of(SendMediaGroup)[0]
+    assert [m.type for m in group.media] == ["photo", "video", "photo"]
+    assert group.media[0].caption and not group.media[1].caption
+
+
+async def test_error_message(env):
+    dp, bot, session, fake = env
+    fake.error = "private"
+    await dp.feed_update(bot, message("https://www.instagram.com/stories/u/1/"))
+    assert any("yopiq" in (c.text or "") for c in session.of(EditMessageText))
+
+
+async def test_plain_text_hint(env):
+    dp, bot, session, _ = env
+    await dp.feed_update(bot, message("salom"))
+    assert "havola" in session.of(SendMessage)[0].text
+
+
+async def test_group_ignores_unknown_sites(env):
+    dp, bot, session, fake = env
+    await dp.feed_update(bot, message("https://news.example.com/article", chat_type="group", chat_id=-100))
+    await dp.feed_update(bot, message("oddiy gap", chat_type="group", chat_id=-100, mid=2))
+    assert not fake.calls and not session.of(SendMessage)
+    await dp.feed_update(bot, message("https://vm.tiktok.com/abc/", chat_type="group", chat_id=-100, mid=3))
+    assert fake.calls
+
+
+async def test_required_subscription(cfg, db, monkeypatch):
+    from dataclasses import replace
+    cfg = replace(cfg, required_channels=("@mychannel",))
+    os.makedirs(cfg.tmp_dir, exist_ok=True)
+    session = MockSession()
+    session.member_status = ChatMemberStatus.LEFT
+    bot = Bot("42:TEST", session=session)
+    dp = await build(cfg, bot, db)
+    fake = FakeDownloader()
+    dp["deps"].downloader = fake
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/ABC/"))
+    assert not fake.calls
+    prompt = session.of(SendMessage)[-1]
+    assert prompt.reply_markup.inline_keyboard[0][0].url == "https://t.me/mychannel"
+    session.member_status = ChatMemberStatus.MEMBER
+    await dp.feed_update(bot, callback("check_sub"))
+    assert any("Rahmat" in c.text for c in session.of(EditMessageText))
+
+
+async def test_per_user_limit(env):
+    dp, bot, session, fake = env
+    queue = dp["queue"]
+    assert queue.try_reserve(USER.id)  # limit = 1, allaqachon band
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/NEW/"))
+    assert not fake.calls
+    assert any("kuting" in c.text for c in session.of(SendMessage))
+    queue.release(USER.id)
+
+
+async def test_admin_stats_and_ban(env, db):
+    dp, bot, session, fake = env
+    await dp.feed_update(bot, message("/stats", user=USER))  # oddiy foydalanuvchi — ruxsat yo'q
+    assert not any("Statistika" in (c.text or "") for c in session.of(SendMessage))
+    await dp.feed_update(bot, message("/stats", user=ADMIN, mid=2))
+    assert "Statistika" in session.of(SendMessage)[-1].text
+    await dp.feed_update(bot, message(f"/ban {USER.id}", user=ADMIN, mid=3))
+    assert await db.is_banned(USER.id)
+    n = len(session.calls)
+    await dp.feed_update(bot, message("https://www.instagram.com/reel/ABC/", mid=4))
+    assert len(session.calls) == n and not fake.calls  # ban qilingan — javob yo'q
+
+
+async def test_broadcast(env, db):
+    import asyncio
+    dp, bot, session, _ = env
+    for uid in (500, 501, 502):
+        await db.touch_user(uid, "u", None)
+    src = Message(message_id=5, date=NOW, text="Yangilik!", chat=Chat(id=1, type="private"), from_user=ADMIN)
+    upd = Update(update_id=3, message=Message(message_id=6, date=NOW, text="/broadcast", from_user=ADMIN,
+                                              chat=Chat(id=1, type="private"), reply_to_message=src))
+    await dp.feed_update(bot, upd)
+    data = session.of(SendMessage)[-1].reply_markup.inline_keyboard[0][0].callback_data
+    assert data == "bc:yes:5"
+    await dp.feed_update(bot, callback(data, user=ADMIN))
+    for _ in range(50):
+        if not dp["app_state"].broadcasting:
+            break
+        await asyncio.sleep(0.05)
+    assert sorted(c.chat_id for c in session.of(CopyMessage)) == [1, 500, 501, 502]  # admin ham bazada

@@ -1,0 +1,22 @@
+# systemd xizmati (Docker'siz ishlatish uchun)
+# O'rnatish:
+#   sudo cp deploy/savebot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now savebot
+#   jurnal: journalctl -u savebot -f
+[Unit]
+Description=Universal Save Bot (Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=savebot
+WorkingDirectory=/opt/savebot
+ExecStartPre=-/opt/savebot/venv/bin/pip install -q -U yt-dlp[default] gallery-dl
+ExecStart=/opt/savebot/venv/bin/python -m savebot
+Restart=always
+RestartSec=5
+# Haftada bir marta qayta ishga tushadi -> yt-dlp yangilanadi
+RuntimeMaxSec=7d
+
+[Install]
+WantedBy=multi-user.target
