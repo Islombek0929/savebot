@@ -212,6 +212,10 @@ def prefers_gallery(url: str) -> bool:
         return True
     if platform == "instagram" and re.match(r"^/(?:[\w.]+/)?p/", path):
         return True
+    # Story: yt-dlp ning story qismi yaroqli cookies bilan ham "login/unreachable" beradi, gallery-dl esa
+    # xuddi shu cookies bilan ishlaydi.
+    if platform == "instagram" and path.startswith("/stories/"):
+        return True
     return False
 
 

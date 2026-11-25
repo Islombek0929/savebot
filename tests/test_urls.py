@@ -67,6 +67,7 @@ def test_format_choice_and_gallery():
     assert not is_audio_site("https://youtu.be/abc")
     assert prefers_gallery("https://www.tiktok.com/@u/photo/123")
     assert prefers_gallery("https://www.instagram.com/p/ABC/")
+    assert prefers_gallery("https://www.instagram.com/stories/ujcbusiness/4037568101059951679")
     assert not prefers_gallery("https://www.instagram.com/reel/ABC/")
 
 
