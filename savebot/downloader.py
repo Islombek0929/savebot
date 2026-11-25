@@ -28,6 +28,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import yt_dlp
 
 from .config import Config
+from .cookies import CookiePool, is_auth_error
 
 log = logging.getLogger(__name__)
 
@@ -566,31 +567,68 @@ class _Ctx:
     quality: int | None = None  # foydalanuvchi tanlagan sifat (None — avtomatik)
     info: dict | None = None  # probe() natijasi — qayta so'rov yubormaslik uchun
     cookies: str | None = None  # cookies faylining shu yuklash uchun nusxasi
+    cookie_source: str | None = None  # nusxa qaysi fayldan olingan (401 bo'lsa chetlash uchun)
     audio_via_video: bool = False  # alohida audio 403 bersa — video bilan yuklab ovozini ajratamiz
 
 
 class Downloader:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, pool: CookiePool | None = None):
         self.cfg = cfg
+        self.pool = pool or CookiePool(
+            dirs=[os.path.dirname(cfg.cookies_file or "") or "cookies"],
+            upload_dir=cfg.cookies_upload_dir,
+            extra_files=[cfg.cookies_file] if cfg.cookies_file else [],
+        )
 
-    def _cookies_copy(self) -> str | None:
+    def _copy_cookies(self, src: str) -> str:
         """Cookies faylining vaqtinchalik nusxasi.
 
         yt-dlp va gallery-dl ish oxirida cookies faylini qayta yozadi: asl fayl faqat o'qish
         uchun ulangan bo'lsa xato beradi, bir vaqtdagi yuklashlar esa uni buzib qo'yishi mumkin."""
-        if not self.cfg.cookies:
-            return None
         os.makedirs(self.cfg.tmp_dir, exist_ok=True)
         fd, path = tempfile.mkstemp(prefix="ck_", suffix=".txt", dir=self.cfg.tmp_dir)
         os.close(fd)
-        shutil.copyfile(self.cfg.cookies, path)
+        shutil.copyfile(src, path)
         return path
+
+    def _attach_cookies(self, ctx: _Ctx, exclude: set[str] | frozenset = frozenset()) -> None:
+        """Shu sayt uchun navbatdagi ishlayotgan cookies faylini ulaydi (yo'q bo'lsa — anonim)."""
+        _remove(ctx.cookies)
+        ctx.cookies = None
+        ctx.cookie_source = self.pool.pick(platform_of(ctx.url), exclude)
+        if ctx.cookie_source:
+            try:
+                ctx.cookies = self._copy_cookies(ctx.cookie_source)
+            except OSError as e:
+                log.warning("Cookies nusxalanmadi (%s): %s", ctx.cookie_source, e)
+                ctx.cookie_source = None
+
+    async def _with_cookie_rotation(self, ctx: _Ctx, call):
+        """401 / "login required" bo'lsa: shu faylni chetlab, keyingi akkaunt bilan, oxirida
+        cookie'siz (anonim) qayta uriniladi — ochiq postlarning ko'pi shunday ham yuklanadi."""
+        tried: set[str] = set()
+        while True:
+            try:
+                return await call()
+            except DownloadError as e:
+                if not (ctx.cookie_source and e.code in ("private", "blocked")
+                        and is_auth_error(e.detail)):
+                    raise
+                self.pool.mark_dead(ctx.cookie_source, platform_of(ctx.url), e.detail)
+                tried.add(ctx.cookie_source)
+                self._attach_cookies(ctx, exclude=tried)
+                log.info("Cookies almashtirildi -> %s: %s",
+                         os.path.basename(ctx.cookie_source) if ctx.cookie_source else "anonim", ctx.url)
+                if ctx.workdir:
+                    _clear(ctx.workdir)
 
     async def probe(self, url: str) -> Probe:
         """Yuklamasdan ma'lumot oladi: nomi, davomiyligi va mavjud sifatlar."""
-        ctx = _Ctx(url, "video", "", Progress(), time.monotonic() + 90, cookies=self._cookies_copy())
+        ctx = _Ctx(url, "video", "", Progress(), time.monotonic() + 90)
+        self._attach_cookies(ctx)
         try:
-            return await asyncio.to_thread(self._probe_sync, ctx)
+            return await self._with_cookie_rotation(
+                ctx, lambda: asyncio.to_thread(self._probe_sync, ctx))
         finally:
             _remove(ctx.cookies)
 
@@ -609,8 +647,8 @@ class Downloader:
         """quality — tanlangan sifat; info — probe() natijasi; ytdlp_error — probe'da yt-dlp
         xato bergan bo'lsa, uni qayta urinmasdan to'g'ridan-to'g'ri gallery-dl ga o'tamiz."""
         ctx = _Ctx(url, kind, workdir, progress or Progress(),
-                   time.monotonic() + self.cfg.download_timeout, quality=quality, info=info,
-                   cookies=self._cookies_copy())
+                   time.monotonic() + self.cfg.download_timeout, quality=quality, info=info)
+        self._attach_cookies(ctx)
         try:
             return await self._download(ctx, ytdlp_error)
         finally:
@@ -701,8 +739,11 @@ class Downloader:
         return opts
 
     async def _ytdlp(self, ctx: _Ctx) -> Result:
+        def attempt():
+            return self._with_cookie_rotation(ctx, lambda: asyncio.to_thread(self._ytdlp_sync, ctx))
+
         try:
-            return await asyncio.to_thread(self._ytdlp_sync, ctx)
+            return await attempt()
         except DownloadError as e:
             if ctx.info is not None and e.code in ("blocked", "private", "failed"):
                 # probe() dagi havolalar eskirgan yoki CDN 403 bergan — bir marta yangidan
@@ -715,7 +756,7 @@ class Downloader:
             log.info("Qayta urinish (%s, audio_via_video=%s): %s", e.code, ctx.audio_via_video, ctx.url)
             _clear(ctx.workdir)
             await asyncio.sleep(1.5)
-            return await asyncio.to_thread(self._ytdlp_sync, ctx)
+            return await attempt()
 
     def _extract(self, ctx: _Ctx) -> tuple[dict, list[dict], float | None]:
         """Ma'lumot olish (yuklamasdan) va tekshirish: pleylist, jonli efir, davomiylik."""

@@ -239,14 +239,16 @@ async def test_retry_with_fresh_info_after_403(cfg, tmp_path, monkeypatch):
     assert calls == [{"id": "old"}, None] and result.files
 
 
-async def test_cookies_copy_used_and_removed(server, cfg, tmp_path):
+async def test_cookies_copy_used_and_removed(server, cfg, tmp_path, monkeypatch):
     import glob
     from dataclasses import replace
     base, _ = server
     src = tmp_path / "cookies.txt"
-    original = "# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tTRUE\t2000000000\ta\tb\n"
+    original = ("# Netscape HTTP Cookie File\n"
+                ".instagram.com\tTRUE\t/\tTRUE\t2000000000\tsessionid\tabc\n")
     src.write_text(original)
     cfg = replace(cfg, cookies_file=str(src))
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", _multi_quality(base))
     dl = Downloader(cfg)
     seen = []
     real_base = dl._base_opts
@@ -258,11 +260,15 @@ async def test_cookies_copy_used_and_removed(server, cfg, tmp_path):
     dl._base_opts = spy
     workdir = tmp_path / "w"
     workdir.mkdir()
-    result = await dl.download(f"{base}/clean.mp4", "video", str(workdir))
+    result = await dl.download("https://www.instagram.com/reel/abc/", "video", str(workdir))
     assert result.files
     assert seen and all(p and p != str(src) for p in seen)  # asl fayl emas, nusxa
     assert not glob.glob(f"{cfg.tmp_dir}/ck_*")  # nusxa o'chirildi
     assert src.read_text() == original  # asl fayl o'zgarmadi
+
+    seen.clear()  # boshqa saytlarga Instagram cookies yuborilmaydi
+    await dl.download(f"{base}/clean.mp4", "video", str(workdir))
+    assert seen and all(p is None for p in seen)
 
 
 async def test_audio_retries_via_video_after_403(cfg, tmp_path, monkeypatch):

@@ -62,6 +62,8 @@ class AppState:
     broadcasting: bool = False
     # Tarqatish uchun xabar kutilayotgan adminlar
     awaiting_broadcast: set = field(default_factory=set)
+    # Cookies matni kutilayotgan adminlar
+    awaiting_cookies: set = field(default_factory=set)
 
 
 # ----------------------------------------------------------------------------------
@@ -766,3 +768,9 @@ async def handle_link(d: Deps, probes: ProbeCache, *, chat_id: int, user_id: int
     else:
         reply = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
         await d.bot.send_message(chat_id, text, reply_markup=markup, reply_parameters=reply)
+
+
+async def notify_admins(bot: Bot, cfg: Config, text: str) -> None:
+    for admin_id in cfg.admin_ids:
+        with contextlib.suppress(TelegramAPIError):
+            await bot.send_message(admin_id, text)

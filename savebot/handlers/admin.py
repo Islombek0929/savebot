@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import html
+import io
 import logging
 import sys
+import time
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ButtonStyle
@@ -13,7 +17,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from ..config import Config
 from ..db import Database
-from ..downloader import versions
+from ..downloader import Downloader, versions
 from ..middlewares import UserMiddleware
 from ..services import AppState, DownloadQueue
 from .user import ADMIN_BUTTON
@@ -43,8 +47,34 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [_btn("📊 Statistika", "adm:stats", ButtonStyle.PRIMARY)],
         [_btn("📢 Xabar yuborish", "adm:bc", ButtonStyle.SUCCESS)],
+        [_btn("🍪 Cookies", "adm:ck", ButtonStyle.PRIMARY)],
         [_btn("🔄 yt-dlp yangilash", "adm:upd"), _btn("🚫 Ban / Unban", "adm:ban")],
     ])
+
+
+def cookies_text(pool) -> str:
+    lines = ["🍪 <b>Cookies</b>\n"]
+    files = pool.status()
+    if not files:
+        lines.append("Hozircha cookies yo'q — bot anonim ishlayapti.")
+    for f in files:
+        parts = []
+        for p in f["platforms"]:
+            if p["alive"]:
+                parts.append(f"✅ {p['platform']}")
+            else:
+                ago = ""
+                if p["since"]:
+                    mins = int((time.time() - p["since"]) // 60)
+                    ago = f", {mins // 60} soat oldin" if mins >= 60 else f", {mins} daqiqa oldin"
+                parts.append(f"❌ {p['platform']} ({html.escape(p['reason'][:60], quote=False)}{ago})")
+        lines.append(f"<b>{html.escape(f['name'], quote=False)}</b>: " + (", ".join(parts) or "—"))
+    lines.append(
+        "\n<b>Yangi cookies qo'shish:</b> «Get cookies.txt LOCALLY» bilan eksport qilingan faylni "
+        "Bloknotda oching, hammasini nusxalab (Ctrl+A, Ctrl+C) shu yerga yuboring.\n"
+        "<i>Bir nechta Instagram akkaunti qo'shsangiz, bot ularni navbat bilan ishlatadi — "
+        "bittasi bloklansa, keyingisiga o'tadi.</i>")
+    return "\n".join(lines)
 
 
 def back_keyboard() -> InlineKeyboardMarkup:
@@ -77,12 +107,14 @@ async def cmd_stats(message: Message, db: Database, queue: DownloadQueue) -> Non
 
 
 async def on_admin_button(cb: CallbackQuery, db: Database, queue: DownloadQueue,
-                          app_state: AppState, dispatcher: Dispatcher) -> None:
+                          app_state: AppState, dispatcher: Dispatcher,
+                          downloader: Downloader) -> None:
     action = cb.data.split(":", 1)[1]
     await cb.answer()
     msg = cb.message
     if action == "menu":
         app_state.awaiting_broadcast.discard(cb.from_user.id)
+        app_state.awaiting_cookies.discard(cb.from_user.id)
         await msg.edit_text(ADMIN_TITLE, reply_markup=admin_keyboard())
     elif action == "stats":
         refresh = InlineKeyboardMarkup(inline_keyboard=[
@@ -106,6 +138,14 @@ async def on_admin_button(cb: CallbackQuery, db: Database, queue: DownloadQueue,
         )
     elif action == "ban":
         await msg.edit_text(BAN_HELP, reply_markup=back_keyboard())
+    elif action == "ck":
+        app_state.awaiting_cookies.add(cb.from_user.id)
+        try:
+            await msg.edit_text(cookies_text(downloader.pool), reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[_btn("🔄 Yangilash", "adm:ck", ButtonStyle.PRIMARY),
+                                  _btn("⬅️ Orqaga", "adm:menu")]]))
+        except TelegramAPIError:  # "message is not modified"
+            pass
     elif action == "upd":
         await msg.edit_text(
             "🔄 yt-dlp va gallery-dl eng yangi versiyaga yangilanadi va bot qayta ishga tushadi "
@@ -117,6 +157,48 @@ async def on_admin_button(cb: CallbackQuery, db: Database, queue: DownloadQueue,
     elif action == "upd_yes":
         await msg.edit_reply_markup(reply_markup=None)
         await _do_update(msg, app_state, queue, dispatcher)
+
+
+class CookiesInput(Filter):
+    """Admin «🍪 Cookies» ni bosgan bo'lsa, yoki matn cookies fayli sarlavhasi bilan boshlansa."""
+
+    async def __call__(self, message: Message, app_state: AppState) -> bool:
+        text = (message.text or "").lstrip()
+        if text.startswith(("# Netscape HTTP Cookie File", "# HTTP Cookie File")):
+            return True
+        uid = message.from_user.id if message.from_user else None
+        return uid in app_state.awaiting_cookies and (bool(message.text) or bool(message.document))
+
+
+async def on_cookies_input(message: Message, bot: Bot, downloader: Downloader,
+                           app_state: AppState) -> None:
+    text = message.text or ""
+    if message.document:
+        if (message.document.file_size or 0) > 1_000_000:
+            await message.answer("❌ Fayl juda katta — cookies fayli odatda bir necha KB bo'ladi.")
+            return
+        try:
+            buf = io.BytesIO()
+            await bot.download(message.document, destination=buf)
+            text = buf.getvalue().decode("utf-8", errors="replace")
+        except Exception as e:  # noqa: BLE001 — Local Bot API'da fayl o'qilmasligi mumkin
+            log.info("Cookies faylini yuklab bo'lmadi: %s", e)
+            await message.answer("❌ Faylni o'qib bo'lmadi. Uni Bloknotda ochib, matnini nusxalab yuboring.")
+            return
+    try:
+        name, platforms = downloader.pool.save_upload(text)
+    except ValueError as e:
+        await message.answer(f"❌ {html.escape(str(e), quote=False)}")
+        return
+    finally:
+        with contextlib.suppress(TelegramAPIError):
+            await message.delete()  # chatda maxfiy sessiya qolmasin
+    app_state.awaiting_cookies.discard(message.from_user.id)
+    await message.answer(
+        f"✅ Saqlandi: <b>{name}</b> ({', '.join(platforms)}). Darhol ishlatiladi, qayta ishga "
+        "tushirish shart emas.\n\n" + cookies_text(downloader.pool),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("⬅️ Admin panel", "adm:menu")]]),
+    )
 
 
 class AwaitingBroadcast(Filter):
@@ -257,6 +339,7 @@ def get_router() -> Router:
     router.message.register(cmd_admin, Command("admin"))
     router.message.register(cmd_admin, F.chat.type == "private", F.text == ADMIN_BUTTON)
     router.callback_query.register(on_admin_button, F.data.startswith("adm:"))
+    router.message.register(on_cookies_input, F.chat.type == "private", CookiesInput())
     # «Xabar yuborish» bosilgandan keyingi xabar (buyruqlardan tashqari)
     router.message.register(on_broadcast_source, F.chat.type == "private", AwaitingBroadcast(),
                             ~F.text.startswith("/"))

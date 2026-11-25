@@ -19,7 +19,7 @@ audioni asl sifatda, suv belgisiz** yuklab beradi.
 | 🕒 **Navbat** | Server bo'yicha bir vaqtda `MAX_PARALLEL` ta yuklash ketadi, qolganlar navbatda o'z o'rnini ko'radi. Bitta foydalanuvchi serverni band qilib qo'ya olmaydi. |
 | 📊 **Jarayon** | «⏳ Yuklanmoqda: 45%» ko'rinishida holat ko'rsatiladi. |
 | 👥 **Guruhlar** | Guruhga qo'shilsa, tanish platformalardagi havolalarni yuklab beradi (oddiy havolalarga javob bermaydi). |
-| 🛠 **Admin panel** | `/stats`, `/broadcast` (hammaga xabar), `/ban`, `/unban`, `/update` (yt-dlp'ni yangilash). |
+| 🛠 **Admin panel** | Tugmalar bilan: statistika, xabar tarqatish, 🍪 cookies (holati va Telegram orqali yangilash), yt-dlp yangilash, ban. |
 | 📢 **Majburiy obuna** | `REQUIRED_CHANNELS` orqali kanal(lar)ga obunani tekshiradi (ixtiyoriy). |
 | 🛡 **Himoya** | Flood'dan himoya, ban, ichki tarmoq manzillarini (localhost, 10.x, 169.254.x) rad etish, root bo'lmagan Docker konteyner. |
 
@@ -94,25 +94,28 @@ shu sababli serverni Yevropada (Germaniya/Niderlandiya) olgan ma'qul. Foydalanuv
 ## Muhim eslatmalar
 
 ### Instagram va cookies
-Instagram server IP'laridan kelgan anonim so'rovlarni tez-tez rad etadi ("login required" yoki
-"HTTP Error 403"). Bunday bo'lsa, bot adminga ogohlantirish yuboradi. Yechim — cookies:
+Instagram server IP'laridan kelgan anonim so'rovlarni tez-tez rad etadi, cookies esa vaqt o'tib
+bekor bo'ladi (401). Bot buni imkon qadar o'zi hal qiladi:
 
-1. **Alohida** Instagram akkaunt oching (asosiy akkauntingizni ishlatmang, bloklanishi mumkin).
-   Akkauntga rasm qo'yib, 2–3 ta sahifaga obuna bo'ling — "tirik" akkaunt kamroq bloklanadi.
-2. Kompyuterda Chrome'ga **"Get cookies.txt LOCALLY"** kengaytmasini o'rnating.
-3. instagram.com ga shu akkaunt bilan kiring → kengaytmani bosing → **Export** (`cookies.txt` yuklanadi).
-4. Faylni serverga `savebot/cookies/cookies.txt` qilib qo'ying. Eng oson usul — nusxa ko'chirish:
-   ```bash
-   mkdir -p /home/amix/savebot/cookies
-   nano /home/amix/savebot/cookies/cookies.txt
-   ```
-   Kompyuterda `cookies.txt` ni Bloknotda oching, hammasini nusxalang (Ctrl+A, Ctrl+C), nano'ga
-   joylang (sichqonchaning o'ng tugmasi), saqlang: **Ctrl+O**, **Enter**, **Ctrl+X**.
-5. `chmod 644 /home/amix/savebot/cookies/cookies.txt` va `docker compose restart bot`.
-6. Logda `Cookies ulangan` chiqsa — tayyor: `docker compose logs bot | grep -i cookies`
+- **Bir nechta akkaunt — navbat bilan.** Har bir akkauntning cookies fayli alohida saqlanadi, bot
+  ularni navbatma-navbat ishlatadi (bitta akkauntga yuk kamayadi — kamroq bloklanadi).
+- **401 bo'lsa — avtomatik keyingisiga.** Ishlamay qolgan fayl o'sha sayt uchun chetga olinadi
+  (masalan, Instagram o'lsa ham shu fayldagi YouTube cookies ishlayveradi), keyingi akkaunt, oxirida
+  cookie'siz (anonim) rejimda qayta uriniladi. Adminga qaysi fayl o'lgani haqida xabar keladi.
+- **Yangilash — Telegram orqali, SSH shart emas:** 🛠 Admin panel → 🍪 Cookies.
 
-`.env` yoki `docker-compose.yml` ni o'zgartirish shart emas. YouTube cookie'larini ham shu faylning
-oxiriga qo'shish mumkin. Cookies vaqt o'tib eskiradi — ogohlantirish yana kelsa, qaytadan eksport qiling.
+Cookies olish:
+1. **Alohida** Instagram akkaunt(lar) oching (asosiy akkauntingizni ishlatmang). 2–3 ta bo'lsa yaxshi.
+2. Chrome'ga **"Get cookies.txt LOCALLY"** kengaytmasini o'rnating.
+3. **Inkognito oynada** instagram.com ga kiring → kengaytma → **Export**, keyin oynani **yoping**
+   (Log out qilmang!). Shunda brauzer bu sessiyani ishlatmaydi va u uzoqroq yashaydi.
+4. Faylni Bloknotda oching, hammasini nusxalang (Ctrl+A, Ctrl+C) va botga yuboring:
+   **🛠 Admin panel → 🍪 Cookies**. Bot tekshiradi, saqlaydi va darhol ishlata boshlaydi.
+   Maxfiy matnli xabaringiz chatdan avtomatik o'chiriladi.
+
+Boshqa akkauntning cookies'ini yuborsangiz — navbatga qo'shiladi, o'sha akkauntniki bo'lsa — eskisi
+almashtiriladi. Serverga qo'lda ham qo'yish mumkin: `cookies/` papkasidagi har bir `.txt` fayl
+o'qiladi. YouTube cookie'lari ham shu yo'l bilan qo'shiladi.
 
 ### "Temporary failure in name resolution"
 Server tarmog'i (ofis, o'quv markazi) tashqi DNS ni yopib qo'ygan va mahalliy DNS Instagram/Facebook

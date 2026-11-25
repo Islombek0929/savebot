@@ -57,6 +57,11 @@ class Config:
         return self.max_mb * 1024 * 1024
 
     @property
+    def cookies_upload_dir(self) -> str:
+        """Admin Telegram orqali yuborgan cookies shu yerda saqlanadi (yoziladigan papka)."""
+        return os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "cookies")
+
+    @property
     def cookies(self) -> str | None:
         if self.cookies_file and os.path.isfile(self.cookies_file):
             return self.cookies_file

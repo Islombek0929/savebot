@@ -30,6 +30,7 @@ from .services import (
     ProbeCache,
     SubscriptionChecker,
     cleanup_audio_tracks,
+    notify_admins,
     parse_channels,
 )
 
@@ -52,6 +53,8 @@ async def build(cfg: Config, bot: Bot, db: Database) -> Dispatcher:
         user_mw=user_mw,
         deps=Deps(bot=bot, cfg=cfg, db=db, downloader=downloader, queue=queue),
     )
+    # Cookies ishlamay qolsa — adminlarga xabar
+    downloader.pool.notifier = lambda text: notify_admins(bot, cfg, text)
     dp.message.outer_middleware(user_mw)
     dp.callback_query.outer_middleware(user_mw)
     dp.include_routers(admin.get_router(), user.get_router())
@@ -126,10 +129,13 @@ async def main() -> bool:
         me = await bot.me()
         await _setup_profile(bot)
         await _setup_admin_commands(bot, cfg)
-        if cfg.cookies:
-            log.info("Cookies ulangan: %s", cfg.cookies)
+        cookie_files = dp["downloader"].pool.status()
+        if cookie_files:
+            log.info("Cookies: %s", "; ".join(
+                f"{f['name']} ({', '.join(p['platform'] for p in f['platforms'])})" for f in cookie_files))
         else:
-            log.info("Cookies yo'q (%s) — Instagram tez-tez login so'rashi mumkin", cfg.cookies_file)
+            log.info("Cookies yo'q — Instagram tez-tez login so'rashi mumkin "
+                     "(Admin panel → 🍪 Cookies orqali qo'shish mumkin)")
         if cfg.admin_ids:
             log.info("Adminlar: %s", ", ".join(map(str, sorted(cfg.admin_ids))))
         else:

@@ -468,7 +468,8 @@ async def test_admin_sees_panel_button_and_panel(env, db):
     await dp.feed_update(bot, message("🛠 Admin panel", user=ADMIN, mid=3))
     panel = session.of(SendMessage)[-1]
     labels = [b.text for row in panel.reply_markup.inline_keyboard for b in row]
-    assert labels == ["📊 Statistika", "📢 Xabar yuborish", "🔄 yt-dlp yangilash", "🚫 Ban / Unban"]
+    assert labels == ["📊 Statistika", "📢 Xabar yuborish", "🍪 Cookies", "🔄 yt-dlp yangilash",
+                      "🚫 Ban / Unban"]
     await dp.feed_update(bot, callback("adm:stats", user=ADMIN))
     assert "Statistika" in session.of(EditMessageText)[-1].text
 
@@ -589,3 +590,34 @@ def test_cleanup_audio_tracks(cfg):
     os.utime(old, (time.time() - 72 * 3600,) * 2)
     assert cleanup_audio_tracks(cfg) == 1
     assert not os.path.exists(old) and os.path.exists(new)
+
+
+
+async def test_cookies_upload_via_admin_panel(env, tmp_path):
+    import os
+    from aiogram.methods import DeleteMessage as Del
+    dp, bot, session, _ = env
+    await dp.feed_update(bot, callback("adm:ck", user=ADMIN))
+    assert "Hozircha cookies yo'q" in session.of(EditMessageText)[-1].text
+    pasted = ("# Netscape HTTP Cookie File\n"
+              ".instagram.com TRUE / TRUE 2000000000 sessionid SECRET\n"
+              ".instagram.com TRUE / TRUE 2000000000 ds_user_id 4242\n")
+    await dp.feed_update(bot, message(pasted, user=ADMIN, mid=70))
+    reply = session.of(SendMessage)[-1].text
+    assert "Saqlandi: <b>instagram-4242.txt</b>" in reply and "✅ instagram" in reply
+    assert any(c.message_id == 70 for c in session.of(Del))  # maxfiy matn chatdan o'chirildi
+    pool = dp["downloader"].pool
+    assert os.path.basename(pool.pick("instagram")) == "instagram-4242.txt"
+
+    # Oddiy foydalanuvchi cookies yubora olmaydi
+    n = len(session.of(SendMessage))
+    await dp.feed_update(bot, message(pasted, user=USER, mid=71))
+    assert "Saqlandi" not in session.of(SendMessage)[-1].text and len(session.of(SendMessage)) == n + 1
+
+
+async def test_cookies_upload_rejects_without_session(env):
+    dp, bot, session, _ = env
+    await dp.feed_update(bot, callback("adm:ck", user=ADMIN))
+    await dp.feed_update(bot, message(".instagram.com TRUE / TRUE 2000000000 csrftoken x",
+                                      user=ADMIN, mid=72))
+    assert "sessionid" in session.of(SendMessage)[-1].text
