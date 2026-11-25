@@ -47,7 +47,8 @@ SOFT_DEAD = 30 * 60
 def is_auth_error(detail: str) -> bool:
     msg = detail.lower()
     return any(s in msg for s in ("401", "unauthorized", "login", "log in", "checkpoint",
-                                  "challenge_required", "not logged in", "sign in"))
+                                  "challenge_required", "not logged in", "sign in",
+                                  "unreachable", "use --cookies"))
 
 
 def _is_hard(detail: str) -> bool:

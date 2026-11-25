@@ -383,6 +383,8 @@ async def alert_admins_login(d: Deps, error: DownloadError, url: str) -> None:
         return
     cookies = ("cookies fayli ulangan, lekin eskirgan yoki akkaunt bloklangan bo'lishi mumkin"
                if d.cfg.cookies else "cookies fayli ulanmagan")
+    if platform == "instagram" and "/stories/" in url:
+        cookies += "; story faqat yaroqli akkaunt cookies'i bilan yuklanadi"
     what = "login so'rayapti" if error.code == "private" else "server IP'sini cheklayapti (403/429)"
     await _alert_once(d, platform, (
         f"⚠️ <b>{platform}</b> {what} ({cookies}).\n"
