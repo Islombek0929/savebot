@@ -97,7 +97,15 @@ def _doh_addrinfo(name, port, type, proto, flags) -> list:
     return results
 
 
+def _ipv4_only() -> bool:
+    """IPv6 marshruti yo'q serverlarda Instagram'ning AAAA manziliga ulanish "[Errno 101] Network is
+    unreachable" beradi. Standart: faqat IPv4. IPV4_ONLY=0 bilan o'chiriladi."""
+    return os.environ.get("IPV4_ONLY", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if family == 0 and _ipv4_only():
+        family = socket.AF_INET
     name = _fallback_name(host)
     if name and family != socket.AF_INET6 and _doh_preferred(name):
         results = _doh_addrinfo(name, port, type, proto, flags)
