@@ -117,6 +117,17 @@ Boshqa akkauntning cookies'ini yuborsangiz — navbatga qo'shiladi, o'sha akkaun
 almashtiriladi. Serverga qo'lda ham qo'yish mumkin: `cookies/` papkasidagi har bir `.txt` fayl
 o'qiladi. YouTube cookie'lari ham shu yo'l bilan qo'shiladi.
 
+### Instagram sessiyasini serverning o'zidan yaratish (cookies tez o'lsa)
+Brauzerdan ko'chirilgan cookies'ni Instagram tez bekor qiladi. Sessiya serverning o'z IP'sidan
+yaratilsa, odatda ancha uzoq yashaydi. Alohida (asosiy emas) akkaunt bilan, serverda:
+
+```bash
+docker compose exec -it bot python -m savebot.ig_login
+```
+Login va parol so'raladi (parol saqlanmaydi), sessiya `data/cookies/instagram-<id>.txt` ga yoziladi
+va bot uni darhol ishlatadi. Instagram tekshiruv (checkpoint) so'rasa — brauzer/telefonda
+«Bu men edim» deb tasdiqlab, qayta urining.
+
 ### "Temporary failure in name resolution"
 Server tarmog'i (ofis, o'quv markazi) tashqi DNS ni yopib qo'ygan va mahalliy DNS Instagram/Facebook
 CDN (`fbcdn.net`) manzillarini topa olmasa shunday bo'ladi. Bot bunday holatda manzilni avtomatik
