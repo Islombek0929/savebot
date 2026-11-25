@@ -204,6 +204,10 @@ def is_audio_site(url: str) -> bool:
     )
 
 
+def is_instagram_story(url: str) -> bool:
+    return platform_of(url) == "instagram" and urlsplit(url).path.startswith("/stories/")
+
+
 def prefers_gallery(url: str) -> bool:
     """Rasm bo'lishi mumkin bo'lgan postlar — avval gallery-dl (rasm+video aralash karusellar)."""
     platform = platform_of(url)
@@ -214,7 +218,7 @@ def prefers_gallery(url: str) -> bool:
         return True
     # Story: yt-dlp ning story qismi yaroqli cookies bilan ham "login/unreachable" beradi, gallery-dl esa
     # xuddi shu cookies bilan ishlaydi.
-    if platform == "instagram" and path.startswith("/stories/"):
+    if is_instagram_story(url):
         return True
     return False
 
@@ -607,18 +611,21 @@ class Downloader:
                 log.warning("Cookies nusxalanmadi (%s): %s", ctx.cookie_source, e)
                 ctx.cookie_source = None
 
-    async def _with_cookie_rotation(self, ctx: _Ctx, call):
+    async def _with_cookie_rotation(self, ctx: _Ctx, call, *, any_error: bool = False):
         """401 / "login required" bo'lsa: shu faylni chetlab, keyingi akkaunt bilan, oxirida
-        cookie'siz (anonim) qayta uriniladi — ochiq postlarning ko'pi shunday ham yuklanadi."""
+        cookie'siz (anonim) qayta uriniladi — ochiq postlarning ko'pi shunday ham yuklanadi.
+        any_error=True: auth bo'lmagan xatoda ham keyingi fayl sinaladi (faylni o'lik deb belgilamasdan)."""
         tried: set[str] = set()
         while True:
             try:
                 return await call()
             except DownloadError as e:
-                if not (ctx.cookie_source and e.code in ("private", "blocked")
-                        and is_auth_error(e.detail)):
+                auth = e.code in ("private", "blocked") and is_auth_error(e.detail)
+                if not ctx.cookie_source or not (
+                        auth or (any_error and e.code in ("private", "blocked", "failed", "not_found"))):
                     raise
-                self.pool.mark_dead(ctx.cookie_source, platform_of(ctx.url), e.detail)
+                if auth:
+                    self.pool.mark_dead(ctx.cookie_source, platform_of(ctx.url), e.detail)
                 tried.add(ctx.cookie_source)
                 self._attach_cookies(ctx, exclude=tried)
                 log.info("Cookies almashtirildi -> %s: %s",
@@ -666,6 +673,8 @@ class Downloader:
             order = [self._ytdlp]
         elif ytdlp_error is not None:
             order = [self._gallery]
+        elif is_instagram_story(url):
+            order = [self._gallery]  # yt-dlp ning story qismi yaroqli cookies bilan ham ishlamaydi
         elif prefers_gallery(url):
             order = [self._gallery, self._ytdlp]
         else:
@@ -852,6 +861,10 @@ class Downloader:
 
     # ---------------- gallery-dl ----------------
     async def _gallery(self, ctx: _Ctx) -> Result:
+        return await self._with_cookie_rotation(
+            ctx, lambda: self._gallery_once(ctx), any_error=is_instagram_story(ctx.url))
+
+    async def _gallery_once(self, ctx: _Ctx) -> Result:
         remaining = min(ctx.deadline - time.monotonic(), GALLERY_TIMEOUT)
         if remaining <= 5:
             raise DownloadError("timeout")
